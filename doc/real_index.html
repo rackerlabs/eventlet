@@ -1,13 +1,13 @@
-<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
-  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<!doctype html>
 
-<html xmlns="http://www.w3.org/1999/xhtml">
+<html>
   <head>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
 
     <title>Eventlet Networking Library</title>
-    <link rel="stylesheet" href="doc/_static/default.css" type="text/css" />
-    <link rel="stylesheet" href="doc/_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" href="../gh-pages/_static/default.css" type="text/css" />
+    <link rel="stylesheet" href="../gh-pages/_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" href="https://yandex.st/highlightjs/7.3/styles/default.min.css">
     <link rel="top" title="Eventlet Networking Library" href="" />
   </head>
   <body>
@@ -32,18 +32,24 @@
 
 <h3><a href="doc/">API Documentation</a></h3>
 
+
 <h3>Installation</h3>
 
 <p>To install eventlet, simply:
 <pre>
+pip install eventlet
+</pre></p>
+<p>If, for some reason, you don't have pip, try:
+<pre>
 easy_install eventlet
 </pre></p>
 
-<p>Alternately, you can download the source tarball from <a href="http://pypi.python.org/pypi/eventlet/">PyPi</a>:
+<p>Alternately, you can download the source tarball of latest release from <a href="http://pypi.python.org/pypi/eventlet/">PyPi</a>:
 <ul>
 <li><a href="http://pypi.python.org/packages/source/e/eventlet/eventlet-0.10.0.tar.gz#md5=0738c05dc364c9b48775be228a85e832">eventlet-0.10.0.tar.gz</a></li>
 </ul>
 </p>
+
 
 <h3>Discussion</h3>
 
@@ -53,44 +59,60 @@ easy_install eventlet
 
 <p>There's an IRC channel dedicated to eventlet: <a href="irc://kubrick.freenode.net/#eventlet">#eventlet on freenode</a>.  It's a pretty chill place to hang out!</p>
 
+<p>We have <a href="https://plus.google.com/communities/102444398246193806164">Eventlet Google+ Community</a>. Join us, +1, share your ideas,
+  report bugs, find new friends or even new job!</p>
+
+
 <h3>Development</h3>
 
-<p><a href="http://bitbucket.org/which_linden/eventlet/">trunk repository</a></p>
+<p><a href="http://bitbucket.org/which_linden/eventlet/">Get Eventlet code from Bitbucket</a>.</p>
 
 <p>We use Mercurial for our source control, hosted by BitBucket.  It's easy to branch off the main repository and contribute patches, tests, and documentation back upstream.</p>
+<p>Or, if you prefer, we have official Github mirror: <a href="http://bitbucket.org/which_linden/eventlet/">get Eventlet code from Github</a>.</p>
+<p>Both repositories are equal and kept in sync. You can use whichever you fancy for downloading, forking, reporting issues and
+  submitting pull requests.</p>
+
 
 <h4>Bugs</h4>
 
-<p><a href="http://bitbucket.org/which_linden/eventlet/issues/new/">Bug Report Form</a></p>
+<p><a href="http://bitbucket.org/which_linden/eventlet/issues/new/">Bitbucket Bug Report Form</a>. No registration is required.</p>
+<p>Or, if you already have Github account: <a href="https://github.com/eventlet/eventlet/issues/new">report Eventlet bug on Github</a>.</p>
 
-<p>No registration is required.  Please be sure to report bugs <a href="http://www.chiark.greenend.org.uk/~sgtatham/bugs.html">as effectively as possible</a>, to ensure that we understand and act on them quickly.</p>
+<p>Please be sure to report bugs <a href="http://www.chiark.greenend.org.uk/~sgtatham/bugs.html">as effectively as possible</a>, to ensure that we understand and act on them quickly.</p>
+
 
 <div class="section" id="web-crawler-example">
 <h2>Web Crawler Example<a class="headerlink" href="#web-crawler-example" title="Permalink to this headline">¶</a></h2>
 <p>This is a simple web &#8220;crawler&#8221; that fetches a bunch of urls using a coroutine pool.  It has as much concurrency (i.e. pages being fetched simultaneously) as coroutines in the pool.</p>
 
-<div class="highlight-python"><div class="highlight"><pre><span class="n">urls</span> <span class="o">=</span> <span class="p">[</span><span class="s">&quot;http://www.google.com/intl/en_ALL/images/logo.gif&quot;</span><span class="p">,</span>
-     <span class="s">&quot;https://wiki.secondlife.com/w/images/secondlife.jpg&quot;</span><span class="p">,</span>
-     <span class="s">&quot;http://us.i1.yimg.com/us.yimg.com/i/ww/beta/y3.gif&quot;</span><span class="p">]</span>
+<pre><code class="language-python">import eventlet
+from eventlet.green import urllib2
 
-<span class="kn">import</span> <span class="nn">eventlet</span>
-<span class="kn">from</span> <span class="nn">eventlet.green</span> <span class="kn">import</span> <span class="n">urllib2</span>
 
-<span class="k">def</span> <span class="nf">fetch</span><span class="p">(</span><span class="n">url</span><span class="p">):</span>
+urls = [
+    "http://www.google.com/intl/en_ALL/images/logo.gif",
+    "https://wiki.secondlife.com/w/images/secondlife.jpg",
+    "http://us.i1.yimg.com/us.yimg.com/i/ww/beta/y3.gif",
+]
 
-  <span class="k">return</span> <span class="n">urllib2</span><span class="o">.</span><span class="n">urlopen</span><span class="p">(</span><span class="n">url</span><span class="p">)</span><span class="o">.</span><span class="n">read</span><span class="p">()</span>
 
-<span class="n">pool</span> <span class="o">=</span> <span class="n">eventlet</span><span class="o">.</span><span class="n">GreenPool</span><span class="p">()</span>
+def fetch(url):
+    return urllib2.urlopen(url).read()
 
-<span class="k">for</span> <span class="n">body</span> <span class="ow">in</span> <span class="n">pool</span><span class="o">.</span><span class="n">imap</span><span class="p">(</span><span class="n">fetch</span><span class="p">,</span> <span class="n">urls</span><span class="p">):</span>
-  <span class="k">print</span> <span class="s">&quot;got body&quot;</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">body</span><span class="p">)</span>
-</pre></div>
+
+pool = eventlet.GreenPool()
+
+for body in pool.imap(fetch, urls):
+    print "got body", len(body)
+</code></pre>
+
 
 <h3>Stats</h3>
-<script type="text/javascript" src="http://www.ohloh.net/p/480234/widgets/project_basic_stats.js"></script>
+<script src="http://www.ohloh.net/p/480234/widgets/project_basic_stats.js"></script>
 </div>
 </div>
 </div>
+
 
 <div class="section" id="contents">
 </div>
@@ -99,14 +121,20 @@ easy_install eventlet
 </div>
 <div class="sphinxsidebar">
 <div class="sphinxsidebarwrapper">
-<h3><a href="">Links</a></h3>
+<h3><a>Links</a></h3>
 <ul>
 <li><a class="reference external" href="http://blog.eventlet.net/">Blog</a></li>
 <li><a class="reference external" href="doc/">Documentation</a></li>
 <li><a class="reference external" href="https://lists.secondlife.com/pipermail/eventletdev/">Mailing List Archives</a></li>
-<li><a class="reference external" href="http://eventlet.net/hudson/">Automated Builds</a></li>
+<!--
+  FIXME: get automated builds back
+  As of 2013-01-07, there is no hosting for our builds. Due to specifics of the project, wide variety of
+  test environments (OS, Python versions, dependency packages) is required.
+-->
+<li><a class="reference external">Automated Builds - absent, hosting needed</a></li>
 <li><a class="reference external" href="http://bitbucket.org/which_linden/eventlet/issues/new/">Bug Report Form</a></li>
-<li><a class="reference external" href="irc://chat.freenode.net/#eventlet">irc channel</a></li>
+<li><a class="reference external" href="irc://chat.freenode.net/#eventlet">IRC channel</a></li>
+<li><a class="reference external" href="https://plus.google.com/communities/102444398246193806164">Eventlet community on Google+</a></li>
 </ul>
         </div>
       </div>
@@ -117,5 +145,7 @@ easy_install eventlet
         <li>.</li>
       </ul>
     </div>
+    <script src="https://yandex.st/highlightjs/7.3/highlight.min.js"></script>
+    <script>hljs.initHighlightingOnLoad();</script>
   </body>
 </html>
