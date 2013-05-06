@@ -397,7 +397,7 @@ class HttpProtocol(BaseHTTPServer.BaseHTTPRequestHandler):
                 for data in result:
                     towrite.append(data)
                     towrite_size += len(data)
-                    if towrite_size >= minimum_chunk_size:
+                    if towrite_size >= minimum_write_chunk_size:
                         write(''.join(towrite))
                         towrite = []
                         just_written_size = towrite_size
