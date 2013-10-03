@@ -1,3 +1,30 @@
+0.14
+====
+* wsgi: handle connection socket timeouts; Thanks to Paul Oppenheim
+* wsgi: close timed out client connections
+* greenio: socket pypy compatibility; Thanks to Alex Gaynor
+* wsgi: env['wsgi.input'] was returning 1 byte strings; Thanks to Eric Urban
+* green.ssl: fix NameError; Github #17; Thanks to Jakub Stasiak
+* websocket: allow "websocket" in lowercase in Upgrade header; Compatibility with current Google Chrome; Thanks to Dmitry Orlov
+* wsgi: allow minimum_chunk_size to be overriden on a per request basis; Thanks to David Goetz
+* wsgi: configurable socket_timeout
+
+0.13
+====
+* hubs: kqueue support! Thanks to YAMAMOTO Takashi, Edward George
+* greenio: Fix AttributeError on MacOSX; Bitbucket #136; Thanks to Derk Tegeler
+* green: subprocess: Fix subprocess.communicate() block on Python 2.7; Thanks to Edward George
+* green: select: ensure that hub can .wait() at least once before timeout; Thanks to YAMAMOTO Takashi
+* tpool: single request queue to avoid deadlocks; Bitbucket pull request 31,32; Thanks to Edward George
+* zmq: pyzmq 13.x compatibility; Thanks to Edward George
+* green: subprocess: Popen.wait() accepts new `timeout` kwarg; Python 3.3 and RHEL 6.1 compatibility
+* hubs: EVENTLET_HUB can point to external modules; Thanks to Edward George
+* semaphore: support timeout for acquire(); Thanks to Justin Patrin
+* support: do not clear sys.exc_info if can be preserved (greenlet >= 0.3.2); Thanks to Edward George
+* Travis continous integration; Thanks to Thomas Grainger, Jakub Stasiak
+* wsgi: minimum_chunk_size of last Server altered all previous (global variable); Thanks to Jakub Stasiak
+* doc: hubs: Point to the correct function in exception message; Thanks to Floris Bruynooghe
+
 0.12
 ====
 * zmq: Fix 100% busy CPU in idle after .bind(PUB) (thanks to Geoff Salmon)

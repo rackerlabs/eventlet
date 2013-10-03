@@ -4,7 +4,8 @@ import subprocess
 import sys
 import tempfile
 
-from tests import LimitedTestCase, main, skip_with_pyevent
+from tests import LimitedTestCase, main, run_python, skip_with_pyevent
+
 
 base_module_contents = """
 import socket
@@ -27,32 +28,31 @@ import socket
 print "importing", patching, socket, patching.socket, patching.urllib
 """
 
+
 class ProcessBase(LimitedTestCase):
-    TEST_TIMEOUT=3 # starting processes is time-consuming
+    TEST_TIMEOUT = 3  # starting processes is time-consuming
+
     def setUp(self):
+        super(ProcessBase, self).setUp()
         self._saved_syspath = sys.path
         self.tempdir = tempfile.mkdtemp('_patcher_test')
-        
+
     def tearDown(self):
+        super(ProcessBase, self).tearDown()
         sys.path = self._saved_syspath
         shutil.rmtree(self.tempdir)
-        
+
     def write_to_tempfile(self, name, contents):
-        filename = os.path.join(self.tempdir, name + '.py')
-        fd = open(filename, "w")
-        fd.write(contents)
-        fd.close()
-        
-    def launch_subprocess(self, filename):
-        python_path = os.pathsep.join(sys.path + [self.tempdir])
-        new_env = os.environ.copy()
-        new_env['PYTHONPATH'] = python_path
+        filename = os.path.join(self.tempdir, name)
         if not filename.endswith('.py'):
             filename = filename + '.py'
-        p = subprocess.Popen([sys.executable, 
-                              os.path.join(self.tempdir, filename)],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=new_env)
-        output, _ = p.communicate()
+        fd = open(filename, "wb")
+        fd.write(contents)
+        fd.close()
+
+    def launch_subprocess(self, filename):
+        path = os.path.join(self.tempdir, filename)
+        output = run_python(path)
         lines = output.split("\n")
         return output, lines
 
@@ -77,7 +77,7 @@ class ImportPatched(ProcessBase):
         self.assert_('eventlet.green.socket' in lines[2], repr(output))
         self.assert_('eventlet.green.urllib' in lines[2], repr(output))
         self.assert_('eventlet.green.httplib' not in lines[2], repr(output))
-        
+
     def test_import_patched_defaults(self):
         self.write_to_tempfile("base", base_module_contents)
         new_mod = """
@@ -93,7 +93,7 @@ print "newmod", base, base.socket, base.urllib.socket.socket
         self.assert_('GreenSocket' in lines[1], repr(output))
 
 
-class MonkeyPatch(ProcessBase):        
+class MonkeyPatch(ProcessBase):
     def test_patched_modules(self):
         new_mod = """
 from eventlet import patcher
@@ -106,7 +106,7 @@ print "newmod", socket.socket, urllib.socket.socket
         output, lines = self.launch_subprocess('newmod.py')
         self.assert_(lines[0].startswith('newmod'), repr(output))
         self.assertEqual(lines[0].count('GreenSocket'), 2, repr(output))
-        
+
     def test_early_patching(self):
         new_mod = """
 from eventlet import patcher
@@ -133,7 +133,7 @@ print "newmod"
         output, lines = self.launch_subprocess('newmod.py')
         self.assertEqual(len(lines), 2, repr(output))
         self.assert_(lines[0].startswith('newmod'), repr(output))
-        
+
 
     def test_typeerror(self):
         new_mod = """
@@ -144,7 +144,7 @@ patcher.monkey_patch(finagle=True)
         output, lines = self.launch_subprocess('newmod.py')
         self.assert_(lines[-2].startswith('TypeError'), repr(output))
         self.assert_('finagle' in lines[-2], repr(output))
-        
+
 
     def assert_boolean_logic(self, call, expected, not_expected=''):
         expected_list = ", ".join(['"%s"' % x for x in expected.split(',') if len(x)])

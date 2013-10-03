@@ -1,13 +1,18 @@
 # package is named tests, not test, so it won't be confused with test in stdlib
 import errno
 import os
-import resource
+try:
+    import resource
+except ImportError:
+    resource = None
 import signal
+import subprocess
+import sys
 import unittest
 import warnings
 
 import eventlet
-from eventlet import debug, hubs
+from eventlet import debug, hubs, tpool
 
 
 # convenience for importers
@@ -173,15 +178,8 @@ class LimitedTestCase(unittest.TestCase):
             signal.signal(signal.SIGALRM, self.previous_alarm[0])
             signal.alarm(self.previous_alarm[1])
 
-        try:
-            hub = hubs.get_hub()
-            num_readers = len(hub.get_readers())
-            num_writers = len(hub.get_writers())
-            assert num_readers == num_writers == 0
-        except AssertionError:
-            print "ERROR: Hub not empty"
-            print debug.format_hub_timers()
-            print debug.format_hub_listeners()
+        tpool.killall()
+        verify_hub_empty()
 
     def assert_less_than(self, a,b,msg=None):
         if msg:
@@ -201,6 +199,11 @@ class LimitedTestCase(unittest.TestCase):
 
 
 def check_idle_cpu_usage(duration, allowed_part):
+    if resource is None:
+        # TODO: use https://code.google.com/p/psutil/
+        from nose.plugins.skip import SkipTest
+        raise SkipTest('CPU usage testing not supported (`import resource` failed)')
+
     r1 = resource.getrusage(resource.RUSAGE_SELF)
     eventlet.sleep(duration)
     r2 = resource.getrusage(resource.RUSAGE_SELF)
@@ -281,6 +284,25 @@ def get_database_auth():
         except IOError:
             pass
     return retval
+
+
+def run_python(path):
+    if not path.endswith('.py'):
+        path += '.py'
+    path = os.path.abspath(path)
+    dir_ = os.path.dirname(path)
+    new_env = os.environ.copy()
+    new_env['PYTHONPATH'] = os.pathsep.join(sys.path + [dir_])
+    p = subprocess.Popen(
+        [sys.executable, path],
+        env=new_env,
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+    )
+    output, _ = p.communicate()
+    return output
+
 
 certificate_file = os.path.join(os.path.dirname(__file__), 'test_server.crt')
 private_key_file = os.path.join(os.path.dirname(__file__), 'test_server.key')

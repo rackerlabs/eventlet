@@ -14,7 +14,7 @@ from eventlet.green import socket as greensocket
 from eventlet import wsgi
 from eventlet.support import get_errno
 
-from tests import find_command
+from tests import find_command, run_python
 
 httplib = eventlet.import_patched('httplib')
 
@@ -195,15 +195,10 @@ class _TestBase(LimitedTestCase):
         super(_TestBase, self).tearDown()
 
     def spawn_server(self, **kwargs):
-        """Spawns a new wsgi server with the given arguments.
-        Sets self.port to the port of the server, and self.killer is the greenlet
-        running it.
+        """Spawns a new wsgi server with the given arguments using
+        :meth:`spawn_thread`.
 
-        Kills any previously-running server."""
-        eventlet.sleep(0) # give previous server a chance to start
-        if self.killer:
-            greenthread.kill(self.killer)
-
+        Sets self.port to the port of the server"""
         new_kwargs = dict(max_size=128,
                           log=self.logfile,
                           site=self.site)
@@ -213,9 +208,19 @@ class _TestBase(LimitedTestCase):
             new_kwargs['sock'] = eventlet.listen(('localhost', 0))
 
         self.port = new_kwargs['sock'].getsockname()[1]
-        self.killer = eventlet.spawn_n(
-            wsgi.server,
-            **new_kwargs)
+        self.spawn_thread(wsgi.server, **new_kwargs)
+
+    def spawn_thread(self, target, **kwargs):
+        """Spawns a new greenthread using specified target and arguments.
+
+        Kills any previously-running server and sets self.killer to the
+        greenthread running the target.
+        """
+        eventlet.sleep(0)  # give previous server a chance to start
+        if self.killer:
+            greenthread.kill(self.killer)
+
+        self.killer = eventlet.spawn_n(target, **kwargs)
 
     def set_site(self):
         raise NotImplementedError
@@ -956,6 +961,34 @@ class TestHttpd(_TestBase):
             'HTTP/1.0 400 Headers Too Large\r\n')
         fd.close()
 
+    def test_032_wsgi_input_as_iterable(self):
+        # https://bitbucket.org/eventlet/eventlet/issue/150
+        # env['wsgi.input'] returns a single byte at a time
+        # when used as an iterator
+        g = [0]
+
+        def echo_by_iterating(env, start_response):
+            start_response('200 OK', [('Content-type', 'text/plain')])
+            for chunk in env['wsgi.input']:
+                g[0] += 1
+                yield chunk
+
+        self.site.application = echo_by_iterating
+        upload_data = '123456789abcdef' * 100
+        request = (
+            'POST / HTTP/1.0\r\n'
+            'Host: localhost\r\n'
+            'Content-Length: %i\r\n\r\n%s'
+        ) % (len(upload_data), upload_data)
+        sock = eventlet.connect(('localhost', self.port))
+        fd = sock.makefile('rw')
+        fd.write(request)
+        fd.flush()
+        response_line, headers, body = read_http(sock)
+        self.assertEquals(body, upload_data)
+        fd.close()
+        self.assertEquals(g[0], 1)
+
     def test_zero_length_chunked_response(self):
         def zero_chunked_app(env, start_response):
             start_response('200 OK', [('Content-type', 'text/plain')])
@@ -1076,12 +1109,15 @@ class TestHttpd(_TestBase):
             return
         log = StringIO()
         # first thing the server does is try to log the IP it's bound to
+
         def run_server():
             try:
-                server = wsgi.server(sock=sock, log=log, site=Site())
+                wsgi.server(sock=sock, log=log, site=Site())
             except ValueError:
                 log.write('broked')
-        eventlet.spawn_n(run_server)
+
+        self.spawn_thread(run_server)
+
         logval = log.getvalue()
         while not logval:
             eventlet.sleep(0.0)
@@ -1144,6 +1180,38 @@ class TestHttpd(_TestBase):
         request_thread.wait()
         server_sock.close()
 
+    def test_server_connection_timeout_exception(self):
+        # Handle connection socket timeouts
+        # https://bitbucket.org/eventlet/eventlet/issue/143/
+        # Runs tests.wsgi_test_conntimeout in a separate process.
+        testcode_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            'wsgi_test_conntimeout.py')
+        output = run_python(testcode_path)
+        sections = output.split("SEPERATOR_SENTINEL")
+        # first section is empty
+        self.assertEqual(3, len(sections), output)
+        # if the "BOOM" check fails, it's because our timeout didn't happen
+        # (if eventlet stops using file.readline() to read HTTP headers,
+        # for instance)
+        for runlog in sections[1:]:
+            debug = False if "debug set to: False" in runlog else True
+            if debug:
+                self.assertTrue("timed out" in runlog)
+            self.assertTrue("BOOM" in runlog)
+            self.assertFalse("Traceback" in runlog)
+
+    def test_server_socket_timeout(self):
+        self.spawn_server(socket_timeout=0.1)
+        sock = eventlet.connect(('localhost', self.port))
+        sock.send('GET / HTTP/1.1\r\n')
+        eventlet.sleep(0.1)
+        try:
+            read_http(sock)
+            assert False, 'Expected ConnectionClosed exception'
+        except ConnectionClosed:
+            pass
+
 
 def read_headers(sock):
     fd = sock.makefile()
@@ -1173,6 +1241,7 @@ def read_headers(sock):
         headers[key.lower()] = value
     return response_line, headers
 
+
 class IterableAlreadyHandledTest(_TestBase):
     def set_site(self):
         self.site = IterableSite()
@@ -1199,6 +1268,7 @@ class IterableAlreadyHandledTest(_TestBase):
         self.assertEqual(headers.get('transfer-encoding'), 'chunked')
         self.assertEqual(body, '0\r\n\r\n') # Still coming back chunked
 
+
 class ProxiedIterableAlreadyHandledTest(IterableAlreadyHandledTest):
     # same thing as the previous test but ensuring that it works with tpooled
     # results as well as regular ones
@@ -1211,6 +1281,7 @@ class ProxiedIterableAlreadyHandledTest(IterableAlreadyHandledTest):
         from eventlet import tpool
         tpool.killall()
         super(ProxiedIterableAlreadyHandledTest, self).tearDown()
+
 
 class TestChunkedInput(_TestBase):
     dirt = ""
@@ -1230,6 +1301,24 @@ class TestChunkedInput(_TestBase):
         elif pi=="/ping":
             input.read()
             response.append("pong")
+        elif pi.startswith("/yield_spaces"):
+            if pi.endswith('override_min'):
+                env['eventlet.minimum_write_chunk_size'] = 1
+            self.yield_next_space = False
+
+            def response_iter():
+                yield ' '
+                num_sleeps = 0
+                while not self.yield_next_space and num_sleeps < 200:
+                    eventlet.sleep(.01)
+                    num_sleeps += 1
+
+                yield ' '
+
+            start_response('200 OK',
+                           [('Content-Type', 'text/plain'),
+                            ('Content-Length', '2')])
+            return response_iter()
         else:
             raise RuntimeError("bad path")
 
@@ -1305,6 +1394,50 @@ class TestChunkedInput(_TestBase):
         fd = self.connect()
         fd.sendall(req)
         self.assertEquals(read_http(fd)[-1], 'this is chunked\nline 2\nline3')
+
+    def test_chunked_readline_wsgi_override_minimum_chunk_size(self):
+
+        fd = self.connect()
+        fd.sendall("POST /yield_spaces/override_min HTTP/1.1\r\nContent-Length: 0\r\n\r\n")
+
+        resp_so_far = ''
+        with eventlet.Timeout(.1):
+            while True:
+                one_byte = fd.recv(1)
+                resp_so_far += one_byte
+                if resp_so_far.endswith('\r\n\r\n'):
+                    break
+            self.assertEquals(fd.recv(1), ' ')
+        try:
+            with eventlet.Timeout(.1):
+                fd.recv(1)
+        except eventlet.Timeout:
+            pass
+        else:
+            self.assert_(False)
+        self.yield_next_space = True
+
+        with eventlet.Timeout(.1):
+            self.assertEquals(fd.recv(1), ' ')
+
+    def test_chunked_readline_wsgi_not_override_minimum_chunk_size(self):
+
+        fd = self.connect()
+        fd.sendall("POST /yield_spaces HTTP/1.1\r\nContent-Length: 0\r\n\r\n")
+
+        resp_so_far = ''
+        try:
+            with eventlet.Timeout(.1):
+                while True:
+                    one_byte = fd.recv(1)
+                    resp_so_far += one_byte
+                    if resp_so_far.endswith('\r\n\r\n'):
+                        break
+                self.assertEquals(fd.recv(1), ' ')
+        except eventlet.Timeout:
+            pass
+        else:
+            self.assert_(False)
 
     def test_close_before_finished(self):
         import signal
