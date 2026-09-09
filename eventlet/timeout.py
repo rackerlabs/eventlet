@@ -18,18 +18,23 @@
 # AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-# THE SOFTWARE.from eventlet.support import greenlets as greenlet
+# THE SOFTWARE.
 
-from eventlet.support import greenlets as greenlet, BaseException
+import functools
+import inspect
+
+import eventlet
+from eventlet.support import greenlets as greenlet
 from eventlet.hubs import get_hub
 
-__all__ = ['Timeout',
-           'with_timeout']
+__all__ = ['Timeout', 'with_timeout', 'wrap_is_timeout', 'is_timeout']
 
-_NONE = object()
+_MISSING = object()
 
-# deriving from BaseException so that "except Exception, e" doesn't catch
+# deriving from BaseException so that "except Exception as e" doesn't catch
 # Timeout exceptions.
+
+
 class Timeout(BaseException):
     """Raises *exception* in the current greenthread after *timeout* seconds.
 
@@ -54,13 +59,13 @@ class Timeout(BaseException):
         it should not be called explicitly, unless the timer has been
         canceled."""
         assert not self.pending, \
-               '%r is already started; to restart it, cancel it first' % self
-        if self.seconds is None: # "fake" timeout (never expires)
+            '%r is already started; to restart it, cancel it first' % self
+        if self.seconds is None:  # "fake" timeout (never expires)
             self.timer = None
-        elif self.exception is None or isinstance(self.exception, bool): # timeout that raises self
+        elif self.exception is None or isinstance(self.exception, bool):  # timeout that raises self
             self.timer = get_hub().schedule_call_global(
                 self.seconds, greenlet.getcurrent().throw, self)
-        else: # regular timeout with user-provided exception
+        else:  # regular timeout with user-provided exception
             self.timer = get_hub().schedule_call_global(
                 self.seconds, greenlet.getcurrent().throw, self.exception)
         return self
@@ -84,10 +89,7 @@ class Timeout(BaseException):
             self.timer = None
 
     def __repr__(self):
-        try:
-            classname = self.__class__.__name__
-        except AttributeError: # Python < 2.5
-            classname = 'Timeout'
+        classname = self.__class__.__name__
         if self.pending:
             pending = ' pending'
         else:
@@ -101,7 +103,7 @@ class Timeout(BaseException):
 
     def __str__(self):
         """
-        >>> raise Timeout
+        >>> raise Timeout  # doctest: +IGNORE_EXCEPTION_DETAIL
         Traceback (most recent call last):
             ...
         Timeout
@@ -129,20 +131,54 @@ class Timeout(BaseException):
         if value is self and self.exception is False:
             return True
 
+    @property
+    def is_timeout(self):
+        return True
+
 
 def with_timeout(seconds, function, *args, **kwds):
     """Wrap a call to some (yielding) function with a timeout; if the called
     function fails to return before the timeout, cancel it and return a flag
     value.
     """
-    timeout_value = kwds.pop("timeout_value", _NONE)
+    timeout_value = kwds.pop("timeout_value", _MISSING)
     timeout = Timeout(seconds)
     try:
         try:
             return function(*args, **kwds)
-        except Timeout, ex:
-            if ex is timeout and timeout_value is not _NONE:
+        except Timeout as ex:
+            if ex is timeout and timeout_value is not _MISSING:
                 return timeout_value
             raise
     finally:
         timeout.cancel()
+
+
+def wrap_is_timeout(base):
+    '''Adds `.is_timeout=True` attribute to objects returned by `base()`.
+
+    When `base` is class, attribute is added as read-only property. Returns `base`.
+    Otherwise, it returns a function that sets attribute on result of `base()` call.
+
+    Wrappers make best effort to be transparent.
+    '''
+    if inspect.isclass(base):
+        base.is_timeout = property(lambda _: True)
+        return base
+
+    @functools.wraps(base)
+    def fun(*args, **kwargs):
+        ex = base(*args, **kwargs)
+        ex.is_timeout = True
+        return ex
+    return fun
+
+
+if isinstance(__builtins__, dict):  # seen when running tests on py310, but HOW??
+    _timeout_err = __builtins__.get('TimeoutError', Timeout)
+else:
+    _timeout_err = getattr(__builtins__, 'TimeoutError', Timeout)
+
+
+def is_timeout(obj):
+    return bool(getattr(obj, 'is_timeout', False)) or isinstance(obj, _timeout_err)

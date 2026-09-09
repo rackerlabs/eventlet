@@ -1,9 +1,12 @@
-__select = __import__('select')
-error = __select.error
-from eventlet.greenthread import getcurrent
+import eventlet
 from eventlet.hubs import get_hub
+__select = eventlet.patcher.original('select')
+error = __select.error
+
 
 __patched__ = ['select']
+__deleted__ = ['devpoll', 'poll', 'epoll', 'kqueue', 'kevent']
+
 
 def get_fileno(obj):
     # The purpose of this function is to exactly replicate
@@ -13,14 +16,15 @@ def get_fileno(obj):
     try:
         f = obj.fileno
     except AttributeError:
-        if not isinstance(obj, (int, long)):
-            raise TypeError("Expected int or long, got " + type(obj))
+        if not isinstance(obj, int):
+            raise TypeError("Expected int or long, got %s" % type(obj))
         return obj
     else:
         rv = f()
-        if not isinstance(rv, (int, long)):
-            raise TypeError("Expected int or long, got " + type(rv))
+        if not isinstance(rv, int):
+            raise TypeError("Expected int or long, got %s" % type(rv))
         return rv
+
 
 def select(read_list, write_list, error_list, timeout=None):
     # error checking like this is required by the stdlib unit tests
@@ -31,11 +35,12 @@ def select(read_list, write_list, error_list, timeout=None):
             raise TypeError("Expected number for timeout")
     hub = get_hub()
     timers = []
-    current = getcurrent()
-    assert hub.greenlet is not current, 'do not call blocking functions from the mainloop'
+    current = eventlet.getcurrent()
+    if hub.greenlet is current:
+        raise RuntimeError('do not call blocking functions from the mainloop')
     ds = {}
     for r in read_list:
-        ds[get_fileno(r)] = {'read' : r}
+        ds[get_fileno(r)] = {'read': r}
     for w in write_list:
         ds.setdefault(get_fileno(w), {})['write'] = w
     for e in error_list:
@@ -51,10 +56,6 @@ def select(read_list, write_list, error_list, timeout=None):
         original = ds[get_fileno(d)]['write']
         current.switch(([], [original], []))
 
-    def on_error(d, _err=None):
-        original = ds[get_fileno(d)]['error']
-        current.switch(([], [], [original]))
-
     def on_timeout2():
         current.switch(([], [], []))
 
@@ -63,18 +64,18 @@ def select(read_list, write_list, error_list, timeout=None):
         # at least once before timed out.  otherwise the following code
         # can time out erroneously.
         #
-        #       s1, s2 = socket.socketpair()
-        #       print select.select([], [s1], [], 0)
+        # s1, s2 = socket.socketpair()
+        # print(select.select([], [s1], [], 0))
         timers.append(hub.schedule_call_global(0, on_timeout2))
 
     if timeout is not None:
         timers.append(hub.schedule_call_global(timeout, on_timeout))
     try:
-        for k, v in ds.iteritems():
+        for k, v in ds.items():
             if v.get('read'):
-                listeners.append(hub.add(hub.READ, k, on_read))
+                listeners.append(hub.add(hub.READ, k, on_read, current.throw, lambda: None))
             if v.get('write'):
-                listeners.append(hub.add(hub.WRITE, k, on_write))
+                listeners.append(hub.add(hub.WRITE, k, on_write, current.throw, lambda: None))
         try:
             return hub.switch()
         finally:

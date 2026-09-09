@@ -1,3 +1,586 @@
+Unreleased
+==========
+
+0.41.2
+======
+* Fix compatibility with greenlet >= 3.4 (#1101)
+* CI: Run apt-get update before installing system packages (#1102)
+
+0.41.1
+======
+
+* Bump actions dependent on nodejs 20 (#1091)
+* wsgi: Handle ENOTCONN (#1092)
+
+0.41.0
+======
+
+* Switch to 3.14 for testing (#1086)
+* Drop 3.9 support (#1085)
+* More visible deprecation (#1077)
+
+0.40.4
+======
+
+* Remove legacy setuptools configuration files (#1072)
+* add 3.14 to supported versions (#1070)
+* Emit warning on startup that eventlet is deprecated (#1065)
+* Fix Python 3.14 on macOS (#1067)
+* Workaround for #1068 (#1069)
+
+0.40.3
+======
+
+* [SECURITY] Fix request smuggling vulnerability by discarding trailers (#1062)
+
+0.40.2
+======
+
+* Fix compatibility issues identified with Python 3.14 on Linux (#1058)
+* Make database removal safer with IF EXISTS (#1056)
+* Prepare jobs and CI/CD for python 3.14 (#1055)
+
+0.40.1
+======
+
+* [fix] "Fix" fork() so it "works" on Python 3.13, and "works" better on older Python versions (#1047)
+  * Behavior change: threads created by eventlet.green.threading.Thread and threading.Thead will be visible across both modules if monkey patching was used. Previously each module would only list threads created in that module.
+  * Bug fix: after fork(), greenlet threads are correctly listed in threading.enumerate() if monkey patching was used. You should not use fork()-without-execve().
+* [fix] Fix patching of removed URLopener class in Python 3.14 (#1053)
+* [fix] ReferenceError except while count rlock (#1042)
+* [fix] Replace deprecated datetime.utcfromtimestamp (#1050)
+* [fix][env] Remove duplicate steps (#1049)
+* [fix] Replace deprecated datetime.datetime.utcnow (#1046)
+
+0.40.0
+======
+
+* [fix] Fix ssl test when linking against openssl 3.5 (#1034)
+* Drop support Python 3.8 (#1021)
+* [doc] Various doc updates (#981, #1033)
+* [env] Drop PyPy support (#1035 #1037)
+
+0.39.1
+======
+
+* [fix] Make LightQueue and derivatives subscriptable (#1027)
+
+0.39.0
+======
+
+* [fix] Remove monotonic from requirements (#1018)
+* [fix] wsgi: Clean up some override logic (#999)
+* [fix] Correct line lookup from inspect.getsourcelines() (#990)
+* Drop support of Python 3.7 (#967)
+* [fix] Calling eventlet.sleep(0) isn't really blocking, so don't blow up (#1015)
+
+
+0.38.2
+======
+
+* [fix] fix the monkey patching with the asyncio hub
+* [feature] introduce the unmonkeypatching feature
+
+0.38.1
+======
+
+* [fix] Python 3.13: Use greenthread's dead state where possible (#1000)
+* [env] bump github Actions (#996)
+* [fix] Fix bug where asyncio hub didn't support multiple os threads (#995)
+
+0.38.0
+======
+
+* Python 3.13 Support (#988)
+* [fix] wsgi: server MUST NOT send Content-Length/Transfer-Encoding header in response with a status code of 1xx, 204 or (2xx to CONNECT request) (#747)
+* [fix] wsgi: No request Content-Length nor Transfer-Encoding implies no body (#985)
+
+
+0.37.0
+======
+
+* [fix] os.read/write waits until file descriptor is ready. https://github.com/eventlet/eventlet/pull/975
+* [fix] Upgrade RLocks as last thing we do https://github.com/eventlet/eventlet/pull/970
+* [security] drop header keys with underscores https://github.com/eventlet/eventlet/pull/959
+* [doc] Various doc updates (Migration Guide, repair links, warns...)
+
+0.36.1
+======
+
+* [fix] eventlet.websocket is not always used from eventlet.wsgi, so do not assume eventlet.set_idle exists https://github.com/eventlet/eventlet/pull/949
+
+0.36.0
+======
+
+* [fix] Make sure asyncio hub doesn't use greendns for asyncio DNS APIs https://github.com/eventlet/eventlet/pull/938
+* [fix] Make asyncio.to_thread work with the same semantics as normal asyncio https://github.com/eventlet/eventlet/pull/930
+* [fix] Refactor congruence checks based on assert at runtime https://github.com/eventlet/eventlet/pull/932
+* [tests] Run tests on macOS in CI, and some fixes to get it in reasonable state (#list https://github.com/eventlet/eventlet/pull/934
+* [fix] Fix wsgi.server shutdown for in-flight requests https://github.com/eventlet/eventlet/pull/912
+* [feature] Add debug convenience helpers - asyncio, threads https://github.com/eventlet/eventlet/pull/925
+* [fix] Handle errors better. https://github.com/eventlet/eventlet/pull/923
+
+0.35.2
+======
+
+* [fix] Fix tool.setuptools/packages list https://github.com/eventlet/eventlet/pull/921
+* [security] Dnspython 2.6.1 - Address DoS via the Tudoor mechanism (CVE-2023-29483) https://github.com/eventlet/eventlet/pull/916
+* [doc] add asyncio into the doc hub page https://github.com/eventlet/eventlet/pull/918
+* [clean] clean obsolete python 2 code from the ssl module https://github.com/eventlet/eventlet/pull/915
+* [fix] Add get_server_info to db_pool.py https://github.com/eventlet/eventlet/pull/324
+* [fix] wsgi: Handle Timeouts from applications https://github.com/eventlet/eventlet/pull/911
+* [fix] shrinks window before connecting https://github.com/eventlet/eventlet/pull/905
+
+0.35.1
+======
+
+* [fix] Do not allow failed patching to stop execution https://github.com/eventlet/eventlet/pull/907
+
+0.35.0
+======
+
+* [doc] Basic documentation for asyncio migration https://github.com/eventlet/eventlet/pull/892
+* [tests] add minimal linting https://github.com/eventlet/eventlet/pull/894
+* [doc] officially host docs on readthedocs https://github.com/eventlet/eventlet/pull/899
+* [fix] fix truncate size nullable https://github.com/eventlet/eventlet/pull/789
+* [fix] Handle transport endpoint shutdown in conditions https://github.com/eventlet/eventlet/pull/884
+* [fix] Rework reject_bad_requests option https://github.com/eventlet/eventlet/pull/890
+* [fix] Fix NameError introduced by #826 https://github.com/eventlet/eventlet/pull/890
+* [feature] Support awaiting GreenThread in an `async def` context https://github.com/eventlet/eventlet/pull/889
+* [infra] Extend test cert to 2049 https://github.com/eventlet/eventlet/pull/643
+* [feature] Asyncio hub support for Python 3.7 to 3.9 https://github.com/eventlet/eventlet/pull/886
+* [infra] Modernize doc generation https://github.com/eventlet/eventlet/pull/880
+* [fix] Fix bad exceptions handlings https://github.com/eventlet/eventlet/pull/883
+* [feature] Support using asyncio coroutines from inside greenlets https://github.com/eventlet/eventlet/pull/877
+* [removal] Remove deprecated CGIHTTPServer and SimpleHTTPServer https://github.com/eventlet/eventlet/pull/881
+* [governance] Update maintenance goals https://github.com/eventlet/eventlet/pull/850
+* [feature] Add an asyncio hub for eventlet https://github.com/eventlet/eventlet/pull/870
+
+0.34.3
+======
+
+* Fix security issue in the wsgi module related to RFC 9112 https://github.com/eventlet/eventlet/pull/826
+* Fix segfault, a new approach for greening existing locks https://github.com/eventlet/eventlet/pull/866
+* greendns: fix getaddrinfo parameter name https://github.com/eventlet/eventlet/pull/809
+* Fix deprecation warning on ssl.PROTOCOL_TLS https://github.com/eventlet/eventlet/pull/872
+* Pytests, fix error at teardown of TestGreenSocket.test_full_duplex https://github.com/eventlet/eventlet/pull/871
+* Skip test which uses Py cgi module https://github.com/eventlet/eventlet/pull/865
+* Drop old code based on python < 3.7
+
+0.34.2
+======
+
+* Allowing inheritance of GreenSSLSocket without overriding the __new_ method https://github.com/eventlet/eventlet/pull/796
+* [bug] Fix broken API related to `__version__` removal https://github.com/eventlet/eventlet/pull/859
+* [doc] Fix pypi broken link https://github.com/eventlet/eventlet/pull/857
+
+0.34.1
+======
+
+* [bug] Fix memory leak in greendns https://github.com/eventlet/eventlet/issues/810
+* [infra] Fix OIDC authentication failure https://github.com/eventlet/eventlet/pull/855
+* [bug] Ignore asyncore and asynchat for Python 3.12+ https://github.com/eventlet/eventlet/issues/804
+
+0.34.0 (Not released on Pypi)
+=============================
+
+* Dropped support for Python 3.6 and earlier.
+* Fix Python 3.13 compat by adding missing attibute '_is_main_interpreter' https://github.com/eventlet/eventlet/pull/847
+* Add support of Python 3.12 https://github.com/eventlet/eventlet/pull/817
+* Drop unmaintained and unused stdlib tests https://github.com/eventlet/eventlet/pull/820
+* Fix tests and CI for Python 3.7 and higher https://github.com/eventlet/eventlet/pull/831 and https://github.com/eventlet/eventlet/pull/832
+* Stop claiming to create universal wheels https://github.com/eventlet/eventlet/pull/841
+* Fix green logging locks for Python versions <= 3.10 https://github.com/eventlet/eventlet/pull/754
+
+0.33.3
+======
+* dnspython 2.3.0 raised AttributeError: module 'dns.rdtypes' has no attribute 'ANY' https://github.com/eventlet/eventlet/issues/781
+
+0.33.2
+======
+* greenio: GreenPipe/fdopen() with 'a' in mode raised io.UnsupportedOperation: File or stream is not writable https://github.com/eventlet/eventlet/pull/758
+
+0.33.1
+======
+* Prevent deadlock on logging._lock https://github.com/eventlet/eventlet/issues/742
+
+0.33.0
+======
+* green.thread: unlocked Lock().release() should raise exception, returned True https://github.com/eventlet/eventlet/issues/697
+* wsgi: Don't break HTTP framing during 100-continue handling https://github.com/eventlet/eventlet/pull/578
+* Python 3.10 partial support https://github.com/eventlet/eventlet/pull/715
+* greendns: Create a DNS resolver lazily rather than on import https://github.com/eventlet/eventlet/issues/462
+* ssl: GreenSSLContext minimum_version and maximum_version setters https://github.com/eventlet/eventlet/issues/726
+
+0.32.0
+======
+* greendns: compatibility with dnspython v2 https://github.com/eventlet/eventlet/pull/722
+* green.ssl: wrap_socket now accepts argument `ciphers` https://github.com/eventlet/eventlet/pull/718
+* websocket: control frames are now always uncompressed per RFC 7692; Thanks to Onno Kortmann
+
+0.31.1
+======
+* ssl: py3.6 using client certificates raised ValueError: check_hostname needs server_hostname argument https://github.com/eventlet/eventlet/pull/705
+
+0.31.0
+======
+* IMPORTANT: websocket: Limit maximum uncompressed frame length to 8MiB https://github.com/eventlet/eventlet/security/advisories/GHSA-9p9m-jm8w-94p2
+
+0.30.3
+======
+* wsgi: websocket ALREADY_HANDLED flag on corolocal
+* green.ssl: Set suppress_ragged_eofs default based on SSLSocket defaults
+* greenio: socket.connect_ex returned None instead of 0 on success
+* Use _imp instead of deprecated imp
+
+0.30.2
+======
+* greendns: patch ssl to fix RecursionError on SSLContext.options.__set__ https://github.com/eventlet/eventlet/issues/677
+
+0.30.1
+======
+* patcher: built-in open() did not accept kwargs https://github.com/eventlet/eventlet/issues/683
+
+0.30.0
+======
+* pyopenssl tsafe module was deprecated and removed in v20.0.0
+* deprecate pyevent hub
+* Deprecate CPython 2.7 and 3.4 support
+* py39: Add _at_fork_reinit method to Semaphores
+
+0.29.1
+======
+patcher: [py27] recursion error in pytest/python2.7 installing register_at_fork https://github.com/eventlet/eventlet/issues/660
+patcher: monkey_patch(builtins=True) failed on py3 because `file` class is gone https://github.com/eventlet/eventlet/issues/541
+don't crash on PyPy 7.0.0 https://github.com/eventlet/eventlet/pull/547
+Only install monotonic on python2 https://github.com/eventlet/eventlet/pull/583
+
+0.29.0
+======
+* ssl: context wrapped listener fails accept() https://github.com/eventlet/eventlet/issues/651
+
+0.28.1
+======
+* Sorry, Eventlet was broken on Windows for versions 0.27-0.28
+  patcher: no os.register_at_fork on Windows (#654)
+* Clean up TypeError in __del__
+
+0.28.0
+======
+* Always remove the right listener from the hub https://github.com/eventlet/eventlet/pull/645
+
+0.27.0
+======
+* patcher: Clean up threading book-keeping at fork when monkey-patched
+* backdoor: handle disconnects better
+
+0.26.1
+======
+* pin dnspython <2.0.0 https://github.com/eventlet/eventlet/issues/619
+
+0.26.0
+======
+* Fix compatibility with SSLContext usage >= Python 3.7
+* wsgi: Fix header capitalization on py3
+* Fix #508: Py37 Deadlock ThreadPoolExecutor (#598)
+* drop Python 3.4 support
+* Fix misc SyntaxWarning's under Python 3.8
+* Remove unnecessary assignment in _recv_loop (#601)
+
+0.25.2
+======
+* green.ssl: redundant set_nonblocking() caused SSLWantReadError
+
+0.25.1
+======
+* wsgi (tests): Stop using deprecated cgi.parse_qs() to support Python 3.8; Thanks to Miro Hrončok
+* os: Add workaround to `open` for pathlib on py 3.7; Thanks to David Szotten
+
+0.25.0
+======
+* wsgi: Only send 100 Continue response if no response has been sent yet; Thanks to Tim Burke
+* wsgi: Return 400 on negative Content-Length request headers; Thanks to Tim Burke
+* Make a GreenPile with no spawn()s an empty sequence; Thanks to nat-goodspeed
+* wsgi: fix Input.readlines when dealing with chunked input; Thanks to Tim Burke
+* wsgi: fix Input.readline on Python 3; Thanks to Tim Burke
+* wsgi: Stop replacing invalid UTF-8 on py3; Thanks to Tim Burke
+* ssl: Fix compatibility with Python 3.7 ssl.SSLSocket; Thanks to Junyi
+* reimport submodule as well in patcher.inject; Thanks to Junyi
+* use Python 2 compatible syntax for keyword-only args; Thanks to nat-goodspeed
+* wsgi: Catch and swallow IOErrors during discard(); Thanks to Tim Burke
+* Fix for Python 3.7; Thanks to Marcel Plch
+* Fix race that could cause using epolls as default hub even when platform does not support it; Thanks to Sergey Shepelev
+* wsgi: make Expect 100-continue field-value case-insensitive; Thanks to Julien Kasarherou
+* greenthread: optimize _exit_funcs getattr/del dance; Thanks to Alex Kashirin
+* New benchmarks runner; Thanks to Sergey Shepelev
+* ssl: fix connect to use monotonic clock for timeout; Thanks to Sergey Shepelev
+
+0.24.1
+======
+* greendns: don't contact nameservers if one entry is returned from hosts file; Thanks to Daniel Alvarez
+
+0.24.0
+======
+* greendns: Fix infinite loop when UDP source address mismatch; Thanks to Lon Hohberger
+* greendns: Fix bad ipv6 comparison; Thanks to Lon Hohberger
+* wsgi: Use byte strings on py2 and unicode strings on py3; Thanks to Tim Burke
+* pools: put to empty pool would block sometimes; Thanks to Sam Merritt
+* greendns: resolving over TCP produced ValueError; Thanks to Jaume Marhuenda
+* support.greendns: ImportError when dns.rdtypes was imported before eventlet; Thanks to Jaume Marhuenda
+* greendns: full comment lines were not skipped; Thanks to nat-goodspeed
+* Drop support for Python3.3; Python2.6 and python-epoll package
+* external dependencies for six, monotonic, dnspython; Thanks to nat-goodspeed
+* wsgi: Don't strip all Unicode whitespace from headers on py3; Thanks to Tim Burke
+
+0.23.0
+======
+* green.threading: current_thread() did not see new monkey-patched threads; Thanks to Jake Tesler
+* tpool: exception in tpool-ed call leaked memory via backtrace
+* wsgi: latin-1 encoding dance for environ[PATH_INFO]
+
+0.22.1
+======
+* Fixed issue installing excess enum34 on Python3.4+ (rebuild with updated setuptools)
+* event: Event.wait() timeout=None argument to be compatible with upstream CPython
+* greendns: Treat /etc/hosts entries case-insensitive; Thanks to Ralf Haferkamp
+
+
+0.22.0
+======
+* convenience: (SO_REUSEPORT) socket.error is not OSError on Python 2; Thanks to JacoFourie@github
+* convenience: SO_REUSEPORT is not available on WSL platform (Linux on Windows)
+* convenience: skip SO_REUSEPORT for bind on random port (0)
+* dns: reading /etc/hosts raised DeprecationWarning for universal lines on Python 3.4+; Thanks to Chris Kerr
+* green.openssl: Drop OpenSSL.rand support; Thanks to Haikel Guemar
+* green.subprocess: keep CalledProcessError identity; Thanks to Linbing@github
+* greendns: be explicit about expecting bytes from sock.recv; Thanks to Matt Bennett
+* greendns: early socket.timeout was breaking IO retry loops
+* GreenSocket.accept does not notify_open; Thanks to orishoshan
+* patcher: set locked RLocks' owner only when patching existing locks; Thanks to Quan Tian
+* patcher: workaround for monotonic "no suitable implementation"; Thanks to Geoffrey Thomas
+* queue: empty except was catching too much
+* socket: context manager support; Thanks to Miguel Grinberg
+* support: update monotonic 1.3 (5c0322dc559bf)
+* support: upgrade bundled dnspython to 1.16.0 (22e9de1d7957e) https://github.com/eventlet/eventlet/issues/427
+* websocket: fd leak when client did not close connection properly; Thanks to Konstantin Enchant
+* websocket: support permessage-deflate extension; Thanks to Costas Christofi and Peter Kovary
+* wsgi: close idle connections (also applies to websockets)
+* wsgi: deprecated options are one step closer to removal
+* wsgi: handle remote connection resets; Thanks to Stefan Nica
+
+0.21.0
+======
+* New timeout error API: .is_timeout=True on exception object
+  It's now easy to test if network error is transient and retry is appropriate.
+  Please spread the word and invite other libraries to support this interface.
+* hubs: use monotonic clock by default (bundled package); Thanks to Roman Podoliaka and Victor Stinner
+* dns: EVENTLET_NO_GREENDNS option is back, green is still default
+* dns: hosts file was consulted after nameservers
+* ssl: RecursionError on Python3.6+; Thanks to justdoit0823@github and Gevent developers
+* wsgi: log_output=False was not disabling startup and accepted messages
+* greenio: Fixed OSError: [WinError 10038] Socket operation on nonsocket
+* dns: EAI_NODATA was removed from RFC3493 and FreeBSD
+* green.select: fix mark_as_closed() wrong number of args
+* green.zmq: socket.{recv,send}_* signatures did not match recent upstream pyzmq
+* New feature: Add zipkin tracing to eventlet
+* db_pool: proxy Connection.set_isolation_level()
+* green.zmq: support RCVTIMEO (receive timeout)
+* green.profile: Python3 compatibility; Thanks to Artur Stawiarski
+* support: upgrade bundled six to 1.10 (dbfbfc818e3d)
+* python3.6: http.client.request support chunked_encoding
+
+0.20.1
+======
+* dns: try unqualified queries as top level
+* test_import_patched_defaults bended to play with pyopenssl>=16.1.0
+* Explicit environ flag for importing eventlet.__version__ without ignoring import errors
+* Type check Semaphore, GreenPool arguments; Thanks to Matthew D. Pagel
+
+0.20.0
+======
+* IMPORTANT: removed select.poll() function
+* DNS resolving is always green with dnspython bundled in
+* greenio: only trampoline when we block
+* convenience: listen() sets SO_REUSEPORT when available; Thanks to Zhengwei Gao
+* ssl: Fix "TypeError: read() argument 2 must be read-write bytes-like object, not None"
+* greenio: _recv_loop behaviour with recv_into on closed sock
+* ipv6: getaddrinfo would fail with scope index
+* green.zmq: Support {send,recv}_{string,json,pyobj} wrappers
+* greendns: Return answers from /etc/hosts despite nameserver errors
+* patcher: fixed green existing locks fail (Python3)
+* Add DAGPool, a dependency-driven greenthread pool
+* wsgi: Unix socket address representation; Thanks to Samuel Merritt
+* tpool: isolate internal socket from default timeout; Thanks to Alex Villacís Lasso
+* wsgi: only skip Content-Type and Content-Length headers (GH-327)
+* wsgi: 400 on blank Content-Length headers (GH-334)
+* greenio: makefile related pypy socket ref counting
+* ssl: Fix recv_into blocking when reading chunks of data
+* websocket: support Gunicorn environ['gunicorn.socket']
+
+0.19.0
+======
+* ssl: IMPORTANT DoS FIX do_handshake_connect=False in server accept(); Thanks to Garth Mollett
+* patcher: patch existing threading locks; Thanks to Alexis Lee
+* green.urllib2: missing patched ssl module; Thanks to Collin RM Stocks
+* wsgi: environ[headers_raw] tuple of unmodified name: value pairs
+* test against modern pyopenssl 16.0.0 for Python 2.7+; Thanks to Victor Stinner
+* wsgi: document compatibility with python `logging`
+* Minor grammatical improvements and typo fixes to the docs; Thanks to Steven Erenst
+
+0.18.4
+======
+* wsgi: change TCP_NODELAY to TCP_QUICKACK, ignore socket error when not available
+
+0.18.3
+======
+* wsgi: Use buffered writes - fixes partial socket.send without custom
+  writelines(); Github issue #295
+* wsgi: TCP_NODELAY enabled by default
+
+0.18.2
+======
+* wsgi: Fix data loss on partial writes (socket.send); Thanks to Jakub Stasiak
+
+0.18.1
+======
+* IMPORTANT: do not use Eventlet 0.18.0 and 0.18.1
+* patcher: Fix AttributeError in subprocess communicate()
+* greenio: Fix "TypeError: an integer is required" in sendto()
+
+0.18.0
+======
+* IMPORTANT: do not use Eventlet 0.18.0 and 0.18.1
+* greenio: Fixed a bug that could cause send() to start an endless loop on
+  ENOTCONN; Thanks to Seyeong Kim
+* wsgi: Fixed UNIX socket address being trimmed in "wsgi starting" log; Thanks
+  to Ihar Hrachyshka
+* ssl: Ported eventlet.green.OpenSSL to Python 3; Thanks to Victor Stinner
+* greenio: Made read() support buflen=-1 and added readall() (Python 3);
+  Thanks to David Szotten
+* wsgi: Made the error raised in case of chunk read failures more precise (this
+  should be backwards compatible as the new exception class,
+  wsgi.ChunkReadError, is a subclass of ValueError which was being used there
+  before); Thanks to Samuel Merritt
+* greenio: Fixed socket.recv() sometimes returning str instead of bytes on
+  Python 3; Thanks to Janusz Harkot
+* wsgi: Improved request body discarding
+* websocket: Fixed TypeError on empty websocket message (Python 3); Thanks to
+  Fukuchi Daisuke
+* subprocess: Fixed universal_newlines support
+* wsgi: Output of 0-byte chunks is now suppressed; Thanks to Samuel Merritt
+* Improved the documentation; Thanks to Ramakrishnan G, ashutosh-mishra and
+  Azhar Hussain
+* greenio: Changed GreenFileIO.write() (Python 3) to always write all data to
+  match the behavior on Python 2; Thanks to Victor Stinner
+* subprocess: Fixed missing subprocess.mswindows attribute on Python 3.5;
+  Thanks to Josh VanderLinden
+* ssl/monkey patching: Fixed a bug that would cause merely importing eventlet
+  to monkey patch the ssl module; Thanks to David Szotten
+* documentation: Added support for building plain text documentation; thanks
+  to Levente Polyak
+* greenio: Fixed handling blocking IO errors in various GreenSocket methods;
+  Thanks to Victor Stinner
+* greenio: Fixed GreenPipe ignoring the bufsize parameter on Python 2; Thanks
+  to Phus Lu
+* backdoor: Added Unix and IPv6 socket support; Thanks to Eric Urban
+
+Backwards incompatible:
+
+* monkey patching: The following select methods and selector classes are now
+  removed, instead of being left in their respective modules after patching
+  even though they are not green (this also fixes HTTPServer.serve_forever()
+  blocking whole process on Python 3):
+
+  * select.poll
+  * select.epoll
+  * select.devpoll
+  * select.kqueue
+  * select.kevent
+  * selectors.PollSelector
+  * selectors.EpollSelector
+  * selectors.DevpollSelector
+  * selectors.KqueueSelector
+
+  Additionally selectors.DefaultSelector points to a green SelectSelector
+
+* greenio: Fixed send() to no longer behave like sendall() which makes it
+  consistent with Python standard library and removes a source of very subtle
+  errors
+
+0.17.4
+======
+* ssl: incorrect initalization of default context; Thanks to stuart-mclaren
+
+0.17.3
+======
+* green.thread: Python3.3+ fixes; Thanks to Victor Stinner
+* Semaphore.acquire() accepts timeout=-1; Thanks to Victor Stinner
+
+0.17.2
+======
+* wsgi: Provide python logging compatibility; Thanks to Sean Dague
+* greendns: fix premature connection closing in DNS proxy; Thanks to Tim Simmons
+* greenio: correct fd close; Thanks to Antonio Cuni and Victor Sergeyev
+* green.ssl: HTTPS client Python 2.7.9+ compatibility
+* setup: tests.{isolated,manual} polluted top-level packages
+
+0.17.1
+======
+* greendns: fix dns.name import and Python3 compatibility
+
+0.17
+====
+* Full Python3 compatibility; Thanks to Jakub Stasiak
+* greendns: IPv6 support, improved handling of /etc/hosts; Thanks to Floris Bruynooghe
+* tpool: make sure we return results during killall; Thanks to David Szotten
+* semaphore: Don't hog a semaphore if someone else is waiting for it; Thanks to Shaun Stanworth
+* green.socket: create_connection() was wrapping all exceptions in socket.error; Thanks to Donagh McCabe
+* Make sure SSL retries are done using the exact same data buffer; Thanks to Lior Neudorfer
+* greenio: shutdown already closed sockets without error; Thanks to David Szotten
+
+0.16.1
+======
+* Wheel build 0.16.0 incorrectly shipped removed module eventlet.util.
+
+0.16.0
+======
+* Fix SSL socket wrapping and Python 2.7.9 compatibility; Thanks to Jakub Stasiak
+* Fix monkey_patch() on Python 3; Thanks to Victor Stinner
+* Fix "maximum recursion depth exceeded in GreenSocket.__del__"; Thanks to Jakub Stasiak
+* db_pool: BaseConnectionPool.clear updates .current_size #139; Thanks to Andrey Gubarev
+* Fix __str__ method on the TimeoutExpired exception class.; Thanks to Tomaz Muraus
+* hubs: drop Twisted support
+* Removed deprecated modules: api, most of coros, pool, proc, processes and util
+* Improved Python 3 compatibility (including patch by raylu); Thanks to Jakub Stasiak
+* Allow more graceful shutdown of wsgi server; Thanks to Stuart McLaren
+* wsgi.input: Make send_hundred_continue_headers() a public API; Thanks to Tushar Gohad
+* tpool: Windows compatibility, fix ResourceWarning. Thanks to Victor Stinner
+* tests: Fix timers not cleaned up on MySQL test skips; Thanks to Corey Wright
+
+0.15.2
+======
+* greenio: fixed memory leak, introduced in 0.15.1; Thanks to Michael Kerrin, Tushar Gohad
+* wsgi: Support optional headers w/ "100 Continue" responses; Thanks to Tushar Gohad
+
+0.15.1
+======
+* greenio: Fix second simultaneous read (parallel paramiko issue); Thanks to Jan Grant, Michael Kerrin
+* db_pool: customizable connection cleanup function; Thanks to Avery Fay
+
+0.15
+====
+* Python3 compatibility -- **not ready yet**; Thanks to Astrum Kuo, Davanum Srinivas, Jakub Stasiak, Victor Sergeyev
+* coros: remove Actor which was deprecated in 2010-01
+* saranwrap: remove saranwrap which was deprecated in 2010-02
+* PyPy compatibility fixes; Thanks to Dmitriy Kruglyak, Jakub Stasiak
+* green.profile: accumulate results between runs; Thanks to Zhang Hua
+* greenthread: add .unlink() method; Thanks to Astrum Kuo
+* packaging: Generate universal wheels; Thanks to Jakub Stasiak
+* queue: Make join not wait if there are no unfinished tasks; Thanks to Jakub Stasiak
+* tpool: proxy __enter__, __exit__ fixes Bitbucket-158; Thanks to Eric Urban
+* websockets: Add websockets13 support; handle lack of Upgrade header; Thanks to Edward George
+* wsgi: capitalize_response_headers option
+
 0.14
 ====
 * wsgi: handle connection socket timeouts; Thanks to Paul Oppenheim

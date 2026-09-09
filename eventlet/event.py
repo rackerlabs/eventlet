@@ -3,13 +3,16 @@ from eventlet.support import greenlets as greenlet
 
 __all__ = ['Event']
 
+
 class NOT_USED:
     def __repr__(self):
         return 'NOT_USED'
 
+
 NOT_USED = NOT_USED()
 
-class Event(object):
+
+class Event:
     """An abstraction where an arbitrary number of coroutines
     can wait for one event from another.
 
@@ -36,6 +39,7 @@ class Event(object):
     """
     _result = None
     _exc = None
+
     def __init__(self):
         self._waiters = set()
         self.reset()
@@ -87,33 +91,40 @@ class Event(object):
             return self.wait()
         return notready
 
-    def wait(self):
+    def wait(self, timeout=None):
         """Wait until another coroutine calls :meth:`send`.
-        Returns the value the other coroutine passed to
-        :meth:`send`.
+        Returns the value the other coroutine passed to :meth:`send`.
 
-        >>> from eventlet import event
         >>> import eventlet
-        >>> evt = event.Event()
+        >>> evt = eventlet.Event()
         >>> def wait_on():
         ...    retval = evt.wait()
-        ...    print "waited for", retval
+        ...    print("waited for {0}".format(retval))
         >>> _ = eventlet.spawn(wait_on)
         >>> evt.send('result')
         >>> eventlet.sleep(0)
         waited for result
 
-        Returns immediately if the event has already
-        occured.
+        Returns immediately if the event has already occurred.
 
         >>> evt.wait()
         'result'
+
+        When the timeout argument is present and not None, it should be a floating point number
+        specifying a timeout for the operation in seconds (or fractions thereof).
         """
         current = greenlet.getcurrent()
         if self._result is NOT_USED:
+            hub = hubs.get_hub()
             self._waiters.add(current)
+            timer = None
+            if timeout is not None:
+                timer = hub.schedule_call_local(timeout, self._do_send, None, None, current)
             try:
-                return hubs.get_hub().switch()
+                result = hub.switch()
+                if timer is not None:
+                    timer.cancel()
+                return result
             finally:
                 self._waiters.discard(current)
         if self._exc is not None:
@@ -128,9 +139,9 @@ class Event(object):
         >>> import eventlet
         >>> evt = event.Event()
         >>> def waiter():
-        ...     print 'about to wait'
+        ...     print('about to wait')
         ...     result = evt.wait()
-        ...     print 'waited for', result
+        ...     print('waited for {0}'.format(result))
         >>> _ = eventlet.spawn(waiter)
         >>> eventlet.sleep(0)
         about to wait
@@ -140,9 +151,8 @@ class Event(object):
 
         It is an error to call :meth:`send` multiple times on the same event.
 
-        >>> evt.send('whoops')
+        >>> evt.send('whoops') # doctest: +IGNORE_EXCEPTION_DETAIL
         Traceback (most recent call last):
-        ...
         AssertionError: Trying to re-send() an already-triggered event.
 
         Use :meth:`reset` between :meth:`send` s to reuse an event object.
@@ -166,12 +176,12 @@ class Event(object):
 
     def send_exception(self, *args):
         """Same as :meth:`send`, but sends an exception to waiters.
-        
+
         The arguments to send_exception are the same as the arguments
         to ``raise``.  If a single exception object is passed in, it
         will be re-raised when :meth:`wait` is called, generating a
-        new stacktrace.  
-        
+        new stacktrace.
+
            >>> from eventlet import event
            >>> evt = event.Event()
            >>> evt.send_exception(RuntimeError())
@@ -181,7 +191,7 @@ class Event(object):
              File "eventlet/event.py", line 120, in wait
                current.throw(*self._exc)
            RuntimeError
-        
+
         If it's important to preserve the entire original stack trace,
         you must pass in the entire :func:`sys.exc_info` tuple.
 
@@ -191,7 +201,7 @@ class Event(object):
            ...     raise RuntimeError()
            ... except RuntimeError:
            ...     evt.send_exception(*sys.exc_info())
-           ... 
+           ...
            >>> evt.wait()
            Traceback (most recent call last):
              File "<stdin>", line 1, in <module>
@@ -199,7 +209,7 @@ class Event(object):
                current.throw(*self._exc)
              File "<stdin>", line 2, in <module>
            RuntimeError
-           
+
         Note that doing so stores a traceback object directly on the
         Event object, which may cause reference cycles. See the
         :func:`sys.exc_info` documentation.

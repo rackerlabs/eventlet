@@ -9,9 +9,10 @@ try:
 except ImportError:
     pass
 
-patcher.inject('httplib',
-    globals(),
-    *to_patch)
-        
+from eventlet.green.http import client
+for name in dir(client):
+    if name not in patcher.__exclude:
+        globals()[name] = getattr(client, name)
+
 if __name__ == '__main__':
     test()

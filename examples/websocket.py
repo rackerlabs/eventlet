@@ -6,9 +6,10 @@ from eventlet import websocket
 import os
 import random
 
+
 @websocket.WebSocketWSGI
 def handle(ws):
-    """  This is the websocket handler function.  Note that we 
+    """  This is the websocket handler function.  Note that we
     can dispatch based on path in here, too."""
     if ws.path == '/echo':
         while True:
@@ -16,12 +17,13 @@ def handle(ws):
             if m is None:
                 break
             ws.send(m)
-            
+
     elif ws.path == '/data':
-        for i in xrange(10000):
+        for i in range(10000):
             ws.send("0 %s %s\n" % (i, random.random()))
             eventlet.sleep(0.1)
-                  
+
+
 def dispatch(environ, start_response):
     """ This resolves to the web page or the websocket depending on
     the path."""
@@ -30,11 +32,11 @@ def dispatch(environ, start_response):
     else:
         start_response('200 OK', [('content-type', 'text/html')])
         return [open(os.path.join(
-                     os.path.dirname(__file__), 
+                     os.path.dirname(__file__),
                      'websocket.html')).read()]
-        
+
 if __name__ == "__main__":
-    # run an example app from the command line            
+    # run an example app from the command line
     listener = eventlet.listen(('127.0.0.1', 7000))
-    print "\nVisit http://localhost:7000/ in your websocket-capable browser.\n"
+    print("\nVisit http://localhost:7000/ in your websocket-capable browser.\n")
     wsgi.server(listener, dispatch)

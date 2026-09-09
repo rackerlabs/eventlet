@@ -1,9 +1,9 @@
+import errno
 import heapq
 import math
-import traceback
 import signal
 import sys
-import warnings
+import traceback
 
 arm_alarm = None
 if hasattr(signal, 'setitimer'):
@@ -19,40 +19,84 @@ else:
             signal.alarm(math.ceil(seconds))
         arm_alarm = alarm_signal
 
-from eventlet.support import greenlets as greenlet, clear_sys_exc_info
+import eventlet.hubs
 from eventlet.hubs import timer
-from eventlet import patcher
-time = patcher.original('time')
+from eventlet.support import greenlets as greenlet
+try:
+    from monotonic import monotonic
+except ImportError:
+    from time import monotonic
 
 g_prevent_multiple_readers = True
 
-READ="read"
-WRITE="write"
+READ = "read"
+WRITE = "write"
 
-class FdListener(object):
-    def __init__(self, evtype, fileno, cb):
+
+def closed_callback(fileno):
+    """ Used to de-fang a callback that may be triggered by a loop in BaseHub.wait
+    """
+    # No-op.
+    pass
+
+
+class FdListener:
+
+    def __init__(self, evtype, fileno, cb, tb, mark_as_closed):
+        """ The following are required:
+        cb - the standard callback, which will switch into the
+            listening greenlet to indicate that the event waited upon
+            is ready
+        tb - a 'throwback'. This is typically greenlet.throw, used
+            to raise a signal into the target greenlet indicating that
+            an event was obsoleted by its underlying filehandle being
+            repurposed.
+        mark_as_closed - if any listener is obsoleted, this is called
+            (in the context of some other client greenlet) to alert
+            underlying filehandle-wrapping objects that they've been
+            closed.
+        """
         assert (evtype is READ or evtype is WRITE)
         self.evtype = evtype
         self.fileno = fileno
         self.cb = cb
+        self.tb = tb
+        self.mark_as_closed = mark_as_closed
+        self.spent = False
+        self.greenlet = greenlet.getcurrent()
+
     def __repr__(self):
-        return "%s(%r, %r, %r)" % (type(self).__name__, self.evtype, self.fileno, self.cb)
+        return "%s(%r, %r, %r, %r)" % (type(self).__name__, self.evtype, self.fileno,
+                                       self.cb, self.tb)
     __str__ = __repr__
 
+    def defang(self):
+        self.cb = closed_callback
+        if self.mark_as_closed is not None:
+            self.mark_as_closed()
+        self.spent = True
 
-noop = FdListener(READ, 0, lambda x: None)
+
+noop = FdListener(READ, 0, lambda x: None, lambda x: None, None)
+
 
 # in debug mode, track the call site that created the listener
+
+
 class DebugListener(FdListener):
-    def __init__(self, evtype, fileno, cb):
+
+    def __init__(self, evtype, fileno, cb, tb, mark_as_closed):
         self.where_called = traceback.format_stack()
         self.greenlet = greenlet.getcurrent()
-        super(DebugListener, self).__init__(evtype, fileno, cb)
+        super().__init__(evtype, fileno, cb, tb, mark_as_closed)
+
     def __repr__(self):
-        return "DebugListener(%r, %r, %r, %r)\n%sEndDebugFdListener" % (
+        return "DebugListener(%r, %r, %r, %r, %r, %r)\n%sEndDebugFdListener" % (
             self.evtype,
             self.fileno,
             self.cb,
+            self.tb,
+            self.mark_as_closed,
             self.greenlet,
             ''.join(self.where_called))
     __str__ = __repr__
@@ -63,7 +107,7 @@ def alarm_handler(signum, frame):
     raise RuntimeError("Blocking detector ALARMED at" + str(inspect.getframeinfo(frame)))
 
 
-class BaseHub(object):
+class BaseHub:
     """ Base hub class for easing the implementation of subclasses that are
     specific to a particular underlying event architecture. """
 
@@ -72,11 +116,15 @@ class BaseHub(object):
     READ = READ
     WRITE = WRITE
 
-    def __init__(self, clock=time.time):
-        self.listeners = {READ:{}, WRITE:{}}
-        self.secondaries = {READ:{}, WRITE:{}}
+    def __init__(self, clock=None):
+        self.listeners = {READ: {}, WRITE: {}}
+        self.secondaries = {READ: {}, WRITE: {}}
+        self.closed = []
 
+        if clock is None:
+            clock = monotonic
         self.clock = clock
+
         self.greenlet = greenlet.greenlet(self.run)
         self.stopping = False
         self.running = False
@@ -98,11 +146,11 @@ class BaseHub(object):
 
     def block_detect_post(self):
         if (hasattr(self, "_old_signal_handler") and
-            self._old_signal_handler):
+                self._old_signal_handler):
             signal.signal(signal.SIGALRM, self._old_signal_handler)
         signal.alarm(0)
 
-    def add(self, evtype, fileno, cb):
+    def add(self, evtype, fileno, cb, tb, mark_as_closed):
         """ Signals an intent to or write a particular file descriptor.
 
         The *evtype* argument is either the constant READ or WRITE.
@@ -111,51 +159,127 @@ class BaseHub(object):
 
         The *cb* argument is the callback which will be called when the file
         is ready for reading/writing.
+
+        The *tb* argument is the throwback used to signal (into the greenlet)
+        that the file was closed.
+
+        The *mark_as_closed* is used in the context of the event hub to
+        prepare a Python object as being closed, pre-empting further
+        close operations from accidentally shutting down the wrong OS thread.
         """
-        listener = self.lclass(evtype, fileno, cb)
+        listener = self.lclass(evtype, fileno, cb, tb, mark_as_closed)
         bucket = self.listeners[evtype]
         if fileno in bucket:
             if g_prevent_multiple_readers:
-                raise RuntimeError("Second simultaneous %s on fileno %s "\
-                     "detected.  Unless you really know what you're doing, "\
-                     "make sure that only one greenthread can %s any "\
-                     "particular socket.  Consider using a pools.Pool. "\
-                     "If you do know what you're doing and want to disable "\
-                     "this error, call "\
-                     "eventlet.debug.hub_prevent_multiple_readers(False)" % (
-                     evtype, fileno, evtype))
+                raise RuntimeError(
+                    "Second simultaneous %s on fileno %s "
+                    "detected.  Unless you really know what you're doing, "
+                    "make sure that only one greenthread can %s any "
+                    "particular socket.  Consider using a pools.Pool. "
+                    "If you do know what you're doing and want to disable "
+                    "this error, call "
+                    "eventlet.debug.hub_prevent_multiple_readers(False) - MY THREAD=%s; "
+                    "THAT THREAD=%s" % (
+                        evtype, fileno, evtype, cb, bucket[fileno]))
             # store off the second listener in another structure
             self.secondaries[evtype].setdefault(fileno, []).append(listener)
         else:
             bucket[fileno] = listener
         return listener
 
+    def _obsolete(self, fileno):
+        """ We've received an indication that 'fileno' has been obsoleted.
+            Any current listeners must be defanged, and notifications to
+            their greenlets queued up to send.
+        """
+        found = False
+        for evtype, bucket in self.secondaries.items():
+            if fileno in bucket:
+                for listener in bucket[fileno]:
+                    found = True
+                    self.closed.append(listener)
+                    listener.defang()
+                del bucket[fileno]
+
+        # For the primary listeners, we actually need to call remove,
+        # which may modify the underlying OS polling objects.
+        for evtype, bucket in self.listeners.items():
+            if fileno in bucket:
+                listener = bucket[fileno]
+                found = True
+                self.closed.append(listener)
+                self.remove(listener)
+                listener.defang()
+
+        return found
+
+    def notify_close(self, fileno):
+        """ We might want to do something when a fileno is closed.
+            However, currently it suffices to obsolete listeners only
+            when we detect an old fileno being recycled, on open.
+        """
+        pass
+
     def remove(self, listener):
+        if listener.spent:
+            # trampoline may trigger this in its finally section.
+            return
+
         fileno = listener.fileno
         evtype = listener.evtype
-        self.listeners[evtype].pop(fileno, None)
-        # migrate a secondary listener to be the primary listener
-        if fileno in self.secondaries[evtype]:
-            sec = self.secondaries[evtype].get(fileno, None)
-            if not sec:
-                return
-            self.listeners[evtype][fileno] = sec.pop(0)
-            if not sec:
+        if listener is self.listeners[evtype][fileno]:
+            del self.listeners[evtype][fileno]
+            # migrate a secondary listener to be the primary listener
+            if fileno in self.secondaries[evtype]:
+                sec = self.secondaries[evtype][fileno]
+                if sec:
+                    self.listeners[evtype][fileno] = sec.pop(0)
+                if not sec:
+                    del self.secondaries[evtype][fileno]
+        else:
+            self.secondaries[evtype][fileno].remove(listener)
+            if not self.secondaries[evtype][fileno]:
                 del self.secondaries[evtype][fileno]
+
+    def mark_as_reopened(self, fileno):
+        """ If a file descriptor is returned by the OS as the result of some
+            open call (or equivalent), that signals that it might be being
+            recycled.
+
+            Catch the case where the fd was previously in use.
+        """
+        self._obsolete(fileno)
 
     def remove_descriptor(self, fileno):
         """ Completely remove all listeners for this fileno.  For internal use
         only."""
+        # gather any listeners we have
         listeners = []
-        listeners.append(self.listeners[READ].pop(fileno, noop))
-        listeners.append(self.listeners[WRITE].pop(fileno, noop))
-        listeners.extend(self.secondaries[READ].pop(fileno, ()))
-        listeners.extend(self.secondaries[WRITE].pop(fileno, ()))
+        listeners.append(self.listeners[READ].get(fileno, noop))
+        listeners.append(self.listeners[WRITE].get(fileno, noop))
+        listeners.extend(self.secondaries[READ].get(fileno, ()))
+        listeners.extend(self.secondaries[WRITE].get(fileno, ()))
         for listener in listeners:
             try:
+                # listener.cb may want to remove(listener)
                 listener.cb(fileno)
-            except Exception, e:
+            except Exception:
                 self.squelch_generic_exception(sys.exc_info())
+        # NOW this fileno is now dead to all
+        self.listeners[READ].pop(fileno, None)
+        self.listeners[WRITE].pop(fileno, None)
+        self.secondaries[READ].pop(fileno, None)
+        self.secondaries[WRITE].pop(fileno, None)
+
+    def close_one(self):
+        """ Triggered from the main run loop. If a listener's underlying FD was
+            closed somehow, throw an exception back to the trampoline, which should
+            be able to manage it appropriately.
+        """
+        listener = self.closed.pop()
+        if not listener.greenlet.dead:
+            # There's no point signalling a greenlet that's already dead.
+            listener.tb(eventlet.hubs.IOClosed(errno.ENOTCONN, "Operation on closed file"))
 
     def ensure_greenlet(self):
         if self.greenlet.dead:
@@ -183,7 +307,6 @@ class BaseHub(object):
                 cur.parent = self.greenlet
         except ValueError:
             pass  # gets raised if there is a greenlet parent cycle
-        clear_sys_exc_info()
         return self.greenlet.switch()
 
     def squelch_exception(self, fileno, exc_info):
@@ -192,7 +315,7 @@ class BaseHub(object):
         sys.stderr.flush()
         try:
             self.remove_descriptor(fileno)
-        except Exception, e:
+        except Exception as e:
             sys.stderr.write("Exception while removing descriptor! %r\n" % (e,))
             sys.stderr.flush()
 
@@ -220,6 +343,9 @@ class BaseHub(object):
             self.running = True
             self.stopping = False
             while not self.stopping:
+                while self.closed:
+                    # We ditch all of these first.
+                    self.close_one()
                 self.prepare_timers()
                 if self.debug_blocking:
                     self.block_detect_pre()
@@ -256,7 +382,8 @@ class BaseHub(object):
         if self.running:
             self.stopping = True
         if wait:
-            assert self.greenlet is not greenlet.getcurrent(), "Can't abort with wait from inside the hub's greenlet."
+            assert self.greenlet is not greenlet.getcurrent(
+            ), "Can't abort with wait from inside the hub's greenlet."
             # schedule an immediate timer just so the hub doesn't sleep
             self.schedule_call_global(0, lambda: None)
             # switch to it; when done the hub will switch back to its parent,
@@ -267,13 +394,11 @@ class BaseHub(object):
         if self.debug_exceptions:
             traceback.print_exception(*exc_info)
             sys.stderr.flush()
-            clear_sys_exc_info()
 
     def squelch_timer_exception(self, timer, exc_info):
         if self.debug_exceptions:
             traceback.print_exception(*exc_info)
             sys.stderr.flush()
-            clear_sys_exc_info()
 
     def add_timer(self, timer):
         scheduled_time = self.clock() + timer.seconds
@@ -283,7 +408,7 @@ class BaseHub(object):
     def timer_canceled(self, timer):
         self.timers_canceled += 1
         len_timers = len(self.timers) + len(self.next_timers)
-        if len_timers > 1000 and len_timers/2 <= self.timers_canceled:
+        if len_timers > 1000 and len_timers / 2 <= self.timers_canceled:
             self.timers_canceled = 0
             self.timers = [t for t in self.timers if not t[1].called]
             self.next_timers = [t for t in self.next_timers if not t[1].called]
@@ -348,7 +473,6 @@ class BaseHub(object):
                 raise
             except:
                 self.squelch_timer_exception(timer, sys.exc_info())
-                clear_sys_exc_info()
 
     # for debugging:
 

@@ -8,6 +8,7 @@ except ImportError:
 import re
 import glob
 
+
 def parse_stdout(s):
     argv = re.search('^===ARGV=(.*?)$', s, re.M).group(1)
     argv = argv.split()
@@ -16,11 +17,11 @@ def parse_stdout(s):
     hub = None
     reactor = None
     while argv:
-        if argv[0]=='--hub':
+        if argv[0] == '--hub':
             hub = argv[1]
             del argv[0]
             del argv[0]
-        elif argv[0]=='--reactor':
+        elif argv[0] == '--reactor':
             reactor = argv[1]
             del argv[0]
             del argv[0]
@@ -29,15 +30,18 @@ def parse_stdout(s):
     if reactor is not None:
         hub += '/%s' % reactor
     return testname, hub
-    
+
+
 unittest_delim = '----------------------------------------------------------------------'
 
+
 def parse_unittest_output(s):
-    s = s[s.rindex(unittest_delim)+len(unittest_delim):]
-    num = int(re.search('^Ran (\d+) test.*?$', s, re.M).group(1))
+    s = s[s.rindex(unittest_delim) + len(unittest_delim):]
+    num = int(re.search(r'^Ran (\d+) test.*?$', s, re.M).group(1))
     ok = re.search('^OK$', s, re.M)
     error, fail, timeout = 0, 0, 0
-    failed_match = re.search(r'^FAILED \((?:failures=(?P<f>\d+))?,? ?(?:errors=(?P<e>\d+))?\)$', s, re.M)
+    failed_match = re.search(
+        r'^FAILED \((?:failures=(?P<f>\d+))?,? ?(?:errors=(?P<e>\d+))?\)$', s, re.M)
     ok_match = re.search('^OK$', s, re.M)
     if failed_match:
         assert not ok_match, (ok_match, s)
@@ -47,10 +51,11 @@ def parse_unittest_output(s):
         error = int(error or '0')
     else:
         assert ok_match, repr(s)
-    timeout_match = re.search('^===disabled because of timeout: (\d+)$', s, re.M)
+    timeout_match = re.search(r'^===disabled because of timeout: (\d+)$', s, re.M)
     if timeout_match:
         timeout = int(timeout_match.group(1))
     return num, error, fail, timeout
+
 
 def main(db):
     c = sqlite3.connect(db)
@@ -68,7 +73,7 @@ def main(db):
     c.commit()
 
     parse_error = 0
-    
+
     SQL = ('select command_record.id, command, stdout, exitcode from command_record '
            'where not exists (select * from parsed_command_record where '
            'parsed_command_record.id=command_record.id)')
@@ -80,29 +85,30 @@ def main(db):
                 runs, errors, fails, timeouts = parse_unittest_output(stdout)
             else:
                 if exitcode == 0:
-                    runs, errors, fails, timeouts = 1,0,0,0
+                    runs, errors, fails, timeouts = 1, 0, 0, 0
                 if exitcode == 7:
-                    runs, errors, fails, timeouts = 0,0,0,1
+                    runs, errors, fails, timeouts = 0, 0, 0, 1
                 elif exitcode:
-                    runs, errors, fails, timeouts = 1,1,0,0
+                    runs, errors, fails, timeouts = 1, 1, 0, 0
         except Exception:
             parse_error += 1
             sys.stderr.write('Failed to parse id=%s\n' % id)
-            print repr(stdout)
+            print(repr(stdout))
             traceback.print_exc()
         else:
-            print id, hub, testname, runs, errors, fails, timeouts
+            print(id, hub, testname, runs, errors, fails, timeouts)
             c.execute('insert into parsed_command_record '
                       '(id, testname, hub, runs, errors, fails, timeouts) '
                       'values (?, ?, ?, ?, ?, ?, ?)',
                       (id, testname, hub, runs, errors, fails, timeouts))
             c.commit()
 
-if __name__=='__main__':
+
+if __name__ == '__main__':
     if not sys.argv[1:]:
         latest_db = sorted(glob.glob('results.*.db'), key=lambda f: os.stat(f).st_mtime)[-1]
-        print latest_db
+        print(latest_db)
         sys.argv.append(latest_db)
     for db in sys.argv[1:]:
         main(db)
-    execfile('generate_report.py')
+    exec(open('generate_report.py').read())

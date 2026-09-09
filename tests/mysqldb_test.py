@@ -1,42 +1,42 @@
 import os
-import sys
 import time
 import traceback
-from tests import skipped, skip_unless, using_pyevent, get_database_auth, LimitedTestCase
+
 import eventlet
 from eventlet import event
 try:
     from eventlet.green import MySQLdb
 except ImportError:
     MySQLdb = False
+import tests
+
 
 def mysql_requirement(_f):
-    """We want to skip tests if using pyevent, MySQLdb is not installed, or if
+    """We want to skip tests if MySQLdb is not installed, or if
     there is no database running on the localhost that the auth file grants
     us access to.
-    
+
     This errs on the side of skipping tests if everything is not right, but
     it's better than a million tests failing when you don't care about mysql
     support."""
-    if using_pyevent(_f):
-        return False
     if MySQLdb is False:
-        print "Skipping mysql tests, MySQLdb not importable"
+        print("Skipping mysql tests, MySQLdb not importable")
         return False
     try:
-        auth = get_database_auth()['MySQLdb'].copy()
+        auth = tests.get_database_auth()['MySQLdb'].copy()
         MySQLdb.connect(**auth)
         return True
     except MySQLdb.OperationalError:
-        print "Skipping mysql tests, error when connecting:"
+        print("Skipping mysql tests, error when connecting:")
         traceback.print_exc()
         return False
 
-class MySQLdbTester(LimitedTestCase):
-    def setUp(self):
-        super(MySQLdbTester, self).setUp()
 
-        self._auth = get_database_auth()['MySQLdb']
+class TestMySQLdb(tests.LimitedTestCase):
+    TEST_TIMEOUT = 50
+
+    def setUp(self):
+        self._auth = tests.get_database_auth()['MySQLdb']
         self.create_db()
         self.connection = None
         self.connection = MySQLdb.connect(**self._auth)
@@ -48,30 +48,32 @@ class MySQLdbTester(LimitedTestCase):
         self.connection.commit()
         cursor.close()
 
+        super().setUp()
+
     def tearDown(self):
         if self.connection:
             self.connection.close()
         self.drop_db()
 
-        super(MySQLdbTester, self).tearDown()
+        super().tearDown()
 
-    @skip_unless(mysql_requirement)    
+    @tests.skip_unless(mysql_requirement)
     def create_db(self):
         auth = self._auth.copy()
         try:
             self.drop_db()
         except Exception:
             pass
-        dbname = 'test_%d_%d' % (os.getpid(), int(time.time()*1000))
+        dbname = 'test_%d_%d' % (os.getpid(), int(time.time() * 1000))
         db = MySQLdb.connect(**auth).cursor()
-        db.execute("create database "+dbname)
+        db.execute("create database " + dbname)
         db.close()
         self._auth['db'] = dbname
         del db
 
     def drop_db(self):
         db = MySQLdb.connect(**self._auth).cursor()
-        db.execute("drop database "+self._auth['db'])
+        db.execute("drop database IF EXISTS " + self._auth['db'])
         db.close()
         del db
 
@@ -106,6 +108,7 @@ class MySQLdbTester(LimitedTestCase):
 
     def assert_cursor_yields(self, curs):
         counter = [0]
+
         def tick():
             while True:
                 counter[0] += 1
@@ -113,16 +116,20 @@ class MySQLdbTester(LimitedTestCase):
         gt = eventlet.spawn(tick)
         curs.execute("select 1")
         rows = curs.fetchall()
-        self.assertEqual(rows, ((1L,),))
-        self.assert_(counter[0] > 0, counter[0])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(rows[0]), 1)
+        self.assertEqual(rows[0][0], 1)
+        assert counter[0] > 0, counter[0]
         gt.kill()
 
     def assert_cursor_works(self, cursor):
         cursor.execute("select 1")
         rows = cursor.fetchall()
-        self.assertEqual(rows, ((1L,),))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(rows[0]), 1)
+        self.assertEqual(rows[0][0], 1)
         self.assert_cursor_yields(cursor)
-        
+
     def assert_connection_works(self, conn):
         curs = conn.cursor()
         self.assert_cursor_works(curs)
@@ -132,11 +139,11 @@ class MySQLdbTester(LimitedTestCase):
         for key in dir(orig):
             if key not in ('__author__', '__path__', '__revision__',
                            '__version__', '__loader__'):
-                self.assert_(hasattr(MySQLdb, key), "%s %s" % (key, getattr(orig, key)))
+                assert hasattr(MySQLdb, key), "%s %s" % (key, getattr(orig, key))
 
     def test_connecting(self):
-        self.assert_(self.connection is not None)
-        
+        assert self.connection is not None
+
     def test_connecting_annoyingly(self):
         self.assert_connection_works(MySQLdb.Connect(**self._auth))
         self.assert_connection_works(MySQLdb.Connection(**self._auth))
@@ -155,7 +162,7 @@ class MySQLdbTester(LimitedTestCase):
         cursor = self.connection.cursor()
         try:
             cursor.execute("garbage blah blah")
-            self.assert_(False)
+            assert False
         except AssertionError:
             raise
         except Exception:
@@ -176,6 +183,7 @@ class MySQLdbTester(LimitedTestCase):
         results = []
         SHORT_QUERY = "select * from test_table"
         evt = event.Event()
+
         def a_query():
             self.assert_cursor_works(curs)
             curs.execute(SHORT_QUERY)
@@ -214,20 +222,8 @@ class MySQLdbTester(LimitedTestCase):
             curs.execute("delete from gargleblatz where a=314159")
             conn.commit()
 
-from tests import patcher_test
 
-class MonkeyPatchTester(patcher_test.ProcessBase):
-    @skip_unless(mysql_requirement)    
+class TestMonkeyPatch(tests.LimitedTestCase):
+    @tests.skip_unless(mysql_requirement)
     def test_monkey_patching(self):
-        output, lines = self.run_script("""
-from eventlet import patcher
-import MySQLdb as m
-from eventlet.green import MySQLdb as gm
-patcher.monkey_patch(all=True, MySQLdb=True)
-print "mysqltest", ",".join(sorted(patcher.already_patched.keys()))
-print "connect", m.connect == gm.connect
-""")
-        self.assertEqual(len(lines), 3)
-        self.assertEqual(lines[0].replace("psycopg,", ""),
-                         'mysqltest MySQLdb,os,select,socket,thread,time')
-        self.assertEqual(lines[1], "connect True")
+        tests.run_isolated('mysqldb_monkey_patch.py')

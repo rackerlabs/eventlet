@@ -1,0 +1,62 @@
+__test__ = False
+
+if __name__ == '__main__':
+    import eventlet
+    eventlet.monkey_patch(all=True)
+    import os
+    import socket
+    import tempfile
+    import time
+    import dns.message
+    import dns.query
+    import dns.flags
+    from eventlet.support import greendns
+
+    # Ensure the global resolver proxy works even without /etc/resolv.conf
+    # (e.g. on Debian buildd servers). See https://github.com/eventlet/eventlet/issues/963
+    if not os.path.exists('/etc/resolv.conf'):
+        tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.conf', delete=False)
+        tmp.write('nameserver 127.0.0.1\n')
+        tmp.close()
+        greendns.resolver._filename = tmp.name
+
+    n = 10
+    delay = 0.01
+    addr_map = {'test-host{}.'.format(i): '0.0.1.{}'.format(i) for i in range(n)}
+
+    def slow_udp(q, *a, **kw):
+        qname = q.question[0].name
+        addr = addr_map[qname.to_text()]
+        r = dns.message.make_response(q)
+        r.index = None
+        r.flags = dns.flags.QR | dns.flags.RD
+        r.answer.append(dns.rrset.from_text(str(qname), 60, 'IN', 'A', addr))
+        r.time = 0.001
+        eventlet.sleep(delay)
+        return r
+
+    dns.query.tcp = lambda: eventlet.Timeout(0)
+    dns.query.udp = slow_udp
+    results = {}
+
+    def fun(name):
+        try:
+            results[name] = socket.gethostbyname(name)
+        except OSError as e:
+            print('name: {} error: {}'.format(name, e))
+
+    pool = eventlet.GreenPool(size=n + 1)
+
+    # FIXME: For unknown reason, first GreenPool.spawn() takes ~250ms on some platforms.
+    # Spawned function executes for normal expected time, it's the GreenPool who needs warmup.
+    pool.spawn(eventlet.sleep)
+
+    t1 = time.time()
+    for name in addr_map:
+        pool.spawn(fun, name)
+    pool.waitall()
+    td = time.time() - t1
+    fail_msg = 'Resolve time expected: ~{:.3f}s, real: {:.3f}'.format(delay, td)
+    assert delay <= td < delay * n, fail_msg
+    assert addr_map == results
+    print('pass')

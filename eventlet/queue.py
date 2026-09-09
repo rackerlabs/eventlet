@@ -1,17 +1,17 @@
 # Copyright (c) 2009 Denis Bilenko, denis.bilenko at gmail com
 # Copyright (c) 2010 Eventlet Contributors (see AUTHORS)
 # and licensed under the MIT license:
-# 
+#
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
 # in the Software without restriction, including without limitation the rights
 # to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 # copies of the Software, and to permit persons to whom the Software is
 # furnished to do so, subject to the following conditions:
-# 
+#
 # The above copyright notice and this permission notice shall be included in
 # all copies or substantial portions of the Software.
-# 
+#
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -22,40 +22,45 @@
 
 """Synchronized queues.
 
-The :mod:`eventlet.queue` module implements multi-producer, multi-consumer 
-queues that work across greenlets, with the API similar to the classes found in 
-the standard :mod:`Queue` and :class:`multiprocessing <multiprocessing.Queue>` 
+The :mod:`eventlet.queue` module implements multi-producer, multi-consumer
+queues that work across greenlets, with the API similar to the classes found in
+the standard :mod:`Queue` and :class:`multiprocessing <multiprocessing.Queue>`
 modules.
 
 A major difference is that queues in this module operate as channels when
 initialized with *maxsize* of zero. In such case, both :meth:`Queue.empty`
-and :meth:`Queue.full` return ``True`` and :meth:`Queue.put` always blocks until 
+and :meth:`Queue.full` return ``True`` and :meth:`Queue.put` always blocks until
 a call to :meth:`Queue.get` retrieves the item.
 
-An interesting difference, made possible because of greenthreads, is 
-that :meth:`Queue.qsize`, :meth:`Queue.empty`, and :meth:`Queue.full` *can* be 
-used as indicators of whether the subsequent :meth:`Queue.get` 
-or :meth:`Queue.put` will not block.  The new methods :meth:`Queue.getting` 
-and :meth:`Queue.putting` report on the number of greenthreads blocking 
+An interesting difference, made possible because of greenthreads, is
+that :meth:`Queue.qsize`, :meth:`Queue.empty`, and :meth:`Queue.full` *can* be
+used as indicators of whether the subsequent :meth:`Queue.get`
+or :meth:`Queue.put` will not block.  The new methods :meth:`Queue.getting`
+and :meth:`Queue.putting` report on the number of greenthreads blocking
 in :meth:`put <Queue.put>` or :meth:`get <Queue.get>` respectively.
 """
 
-import sys
-import heapq
 import collections
+import heapq
+import sys
 import traceback
-from Queue import Full, Empty
+import types
 
-
-_NONE = object()
-from eventlet.hubs import get_hub
-from eventlet.greenthread import getcurrent
 from eventlet.event import Event
+from eventlet.greenthread import getcurrent
+from eventlet.hubs import get_hub
+import queue as Stdlib_Queue
 from eventlet.timeout import Timeout
+
 
 __all__ = ['Queue', 'PriorityQueue', 'LifoQueue', 'LightQueue', 'Full', 'Empty']
 
-class Waiter(object):
+_NONE = object()
+Full = Stdlib_Queue.Full
+Empty = Stdlib_Queue.Empty
+
+
+class Waiter:
     """A low level synchronization class.
 
     Wrapper around greenlet's ``switch()`` and ``throw()`` calls that makes them safe:
@@ -77,11 +82,13 @@ class Waiter(object):
             waiting = ' waiting'
         else:
             waiting = ''
-        return '<%s at %s%s greenlet=%r>' % (type(self).__name__, hex(id(self)), waiting, self.greenlet)
+        return '<%s at %s%s greenlet=%r>' % (
+            type(self).__name__, hex(id(self)), waiting, self.greenlet,
+        )
 
     def __str__(self):
         """
-        >>> print Waiter()
+        >>> print(Waiter())
         <Waiter greenlet=None>
         """
         if self.waiting:
@@ -93,6 +100,8 @@ class Waiter(object):
     def __nonzero__(self):
         return self.greenlet is not None
 
+    __bool__ = __nonzero__
+
     @property
     def waiting(self):
         return self.greenlet is not None
@@ -101,22 +110,24 @@ class Waiter(object):
         """Wake up the greenlet that is calling wait() currently (if there is one).
         Can only be called from Hub's greenlet.
         """
-        assert getcurrent() is get_hub().greenlet, "Can only use Waiter.switch method from the mainloop"
+        assert getcurrent() is get_hub(
+        ).greenlet, "Can only use Waiter.switch method from the mainloop"
         if self.greenlet is not None:
             try:
                 self.greenlet.switch(value)
-            except:
+            except Exception:
                 traceback.print_exc()
 
     def throw(self, *throw_args):
         """Make greenlet calling wait() wake up (if there is a wait()).
         Can only be called from Hub's greenlet.
         """
-        assert getcurrent() is get_hub().greenlet, "Can only use Waiter.switch method from the mainloop"
+        assert getcurrent() is get_hub(
+        ).greenlet, "Can only use Waiter.switch method from the mainloop"
         if self.greenlet is not None:
             try:
                 self.greenlet.throw(*throw_args)
-            except:
+            except Exception:
                 traceback.print_exc()
 
     # XXX should be renamed to get() ? and the whole class is called Receiver?
@@ -131,16 +142,17 @@ class Waiter(object):
             self.greenlet = None
 
 
-class LightQueue(object):
+class LightQueue:
     """
-    This is a variant of Queue that behaves mostly like the standard 
-    :class:`Queue`.  It differs by not supporting the 
-    :meth:`task_done <Queue.task_done>` or :meth:`join <Queue.join>` methods,
-    and is a little faster for not having that overhead.
+    This is a variant of Queue that behaves mostly like the standard
+    :class:`Stdlib_Queue`.  It differs by not supporting the
+    :meth:`task_done <Stdlib_Queue.task_done>` or
+    :meth:`join <Stdlib_Queue.join>` methods, and is a little faster for
+    not having that overhead.
     """
 
     def __init__(self, maxsize=None):
-        if maxsize is None or maxsize < 0: #None is not comparable in 3.x
+        if maxsize is None or maxsize < 0:  # None is not comparable in 3.x
             self.maxsize = None
         else:
             self.maxsize = maxsize
@@ -186,18 +198,19 @@ class LightQueue(object):
         """Resizes the queue's maximum size.
 
         If the size is increased, and there are putters waiting, they may be woken up."""
-        if self.maxsize is not None and (size is None or size > self.maxsize): # None is not comparable in 3.x
+        # None is not comparable in 3.x
+        if self.maxsize is not None and (size is None or size > self.maxsize):
             # Maybe wake some stuff up
             self._schedule_unlock()
         self.maxsize = size
-        
+
     def putting(self):
         """Returns the number of greenthreads that are blocked waiting to put
         items into the queue."""
         return len(self.putters)
-        
+
     def getting(self):
-        """Returns the number of greenthreads that are blocked waiting on an 
+        """Returns the number of greenthreads that are blocked waiting on an
         empty queue."""
         return len(self.getters)
 
@@ -210,7 +223,8 @@ class LightQueue(object):
 
         ``Queue(None)`` is never full.
         """
-        return self.maxsize is not None and self.qsize() >= self.maxsize # None is not comparable in 3.x
+        # None is not comparable in 3.x
+        return self.maxsize is not None and self.qsize() >= self.maxsize
 
     def put(self, item, block=True, timeout=None):
         """Put an item into the queue.
@@ -240,7 +254,7 @@ class LightQueue(object):
                     return
             raise Full
         elif block:
-            waiter = ItemWaiter(item)
+            waiter = ItemWaiter(item, block)
             self.putters.add(waiter)
             timeout = Timeout(timeout, Full)
             try:
@@ -253,6 +267,14 @@ class LightQueue(object):
             finally:
                 timeout.cancel()
                 self.putters.discard(waiter)
+        elif self.getters:
+            waiter = ItemWaiter(item, block)
+            self.putters.add(waiter)
+            self._schedule_unlock()
+            result = waiter.wait()
+            assert result is waiter, "Invalid switch into Queue.put: %r" % (result, )
+            if waiter.item is not _NONE:
+                raise Full
         else:
             raise Full
 
@@ -295,7 +317,11 @@ class LightQueue(object):
                 self.getters.add(waiter)
                 if self.putters:
                     self._schedule_unlock()
-                return waiter.wait()
+                try:
+                    return waiter.wait()
+                except:
+                    self._schedule_unlock()
+                    raise
             finally:
                 self.getters.discard(waiter)
                 timeout.cancel()
@@ -328,20 +354,31 @@ class LightQueue(object):
                         getter = self.getters.pop()
                         if getter:
                             item = putter.item
-                            putter.item = _NONE # this makes greenlet calling put() not to call _put() again
+                            # this makes greenlet calling put() not to call _put() again
+                            putter.item = _NONE
                             self._put(item)
                             item = self._get()
                             getter.switch(item)
                             putter.switch(putter)
                         else:
                             self.putters.add(putter)
-                elif self.putters and (self.getters or self.maxsize is None or self.qsize() < self.maxsize):
+                elif self.putters and (self.getters or
+                                       self.maxsize is None or
+                                       self.qsize() < self.maxsize):
                     putter = self.putters.pop()
                     putter.switch(putter)
+                elif self.putters and not self.getters:
+                    full = [p for p in self.putters if not p.block]
+                    if not full:
+                        break
+                    for putter in full:
+                        self.putters.discard(putter)
+                        get_hub().schedule_call_global(
+                            0, putter.greenlet.throw, Full)
                 else:
                     break
         finally:
-            self._event_unlock = None # QQQ maybe it's possible to obtain this info from libevent?
+            self._event_unlock = None  # QQQ maybe it's possible to obtain this info from libevent?
             # i.e. whether this event is pending _OR_ currently executing
         # testcase: 2 greenlets: while True: q.put(q.get()) - nothing else has a change to execute
         # to avoid this, schedule unlock with timer(0, ...) once in a while
@@ -350,27 +387,34 @@ class LightQueue(object):
         if self._event_unlock is None:
             self._event_unlock = get_hub().schedule_call_global(0, self._unlock)
 
+    # TODO(stephenfin): Remove conditional when we bump the minimum Python
+    # version
+    if sys.version_info >= (3, 9):
+        __class_getitem__ = classmethod(types.GenericAlias)
+
 
 class ItemWaiter(Waiter):
-    __slots__ = ['item']
+    __slots__ = ['item', 'block']
 
-    def __init__(self, item):
+    def __init__(self, item, block):
         Waiter.__init__(self)
         self.item = item
-        
+        self.block = block
+
 
 class Queue(LightQueue):
     '''Create a queue object with a given maximum size.
 
     If *maxsize* is less than zero or ``None``, the queue size is infinite.
 
-    ``Queue(0)`` is a channel, that is, its :meth:`put` method always blocks 
-    until the item is delivered. (This is unlike the standard :class:`Queue`, 
-    where 0 means infinite size).
-    
-    In all other respects, this Queue class resembled the standard library,
-    :class:`Queue`.
+    ``Queue(0)`` is a channel, that is, its :meth:`put` method always blocks
+    until the item is delivered. (This is unlike the standard
+    :class:`Stdlib_Queue`, where 0 means infinite size).
+
+    In all other respects, this Queue class resembles the standard library,
+    :class:`Stdlib_Queue`.
     '''
+
     def __init__(self, maxsize=None):
         LightQueue.__init__(self, maxsize)
         self.unfinished_tasks = 0
@@ -393,8 +437,8 @@ class Queue(LightQueue):
 
     def task_done(self):
         '''Indicate that a formerly enqueued task is complete. Used by queue consumer threads.
-        For each :meth:`get <Queue.get>` used to fetch a task, a subsequent call to :meth:`task_done` tells the queue
-        that the processing on the task is complete.
+        For each :meth:`get <Queue.get>` used to fetch a task, a subsequent call to
+        :meth:`task_done` tells the queue that the processing on the task is complete.
 
         If a :meth:`join` is currently blocking, it will resume when all items have been processed
         (meaning that a :meth:`task_done` call was received for every item that had been
@@ -402,7 +446,7 @@ class Queue(LightQueue):
 
         Raises a :exc:`ValueError` if called more times than there were items placed in the queue.
         '''
-        
+
         if self.unfinished_tasks <= 0:
             raise ValueError('task_done() called too many times')
         self.unfinished_tasks -= 1
@@ -417,7 +461,8 @@ class Queue(LightQueue):
         that the item was retrieved and all work on it is complete. When the count of
         unfinished tasks drops to zero, :meth:`join` unblocks.
         '''
-        self._cond.wait()
+        if self.unfinished_tasks > 0:
+            self._cond.wait()
 
 
 class PriorityQueue(Queue):
@@ -449,4 +494,3 @@ class LifoQueue(Queue):
 
     def _get(self):
         return self.queue.pop()
-

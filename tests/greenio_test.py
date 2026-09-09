@@ -1,17 +1,24 @@
-import socket as _orig_sock
-from tests import LimitedTestCase, skip_with_pyevent, main, skipped, s2b, skip_if, skip_on_windows
-from eventlet import event, greenio, debug
-from eventlet.hubs import get_hub
-from eventlet.green import select, socket, time
-from eventlet.support import get_errno
-
 import array
 import errno
-import eventlet
 import fcntl
+import gc
+from io import DEFAULT_BUFFER_SIZE
 import os
+import shutil
+import socket as _orig_sock
+import struct
 import sys
-import tempfile, shutil
+import tempfile
+
+import pytest
+
+import eventlet
+from eventlet import event, greenio, debug
+from eventlet.hubs import get_hub
+from eventlet.green import select, socket, time, ssl
+from eventlet.support import get_errno
+import tests
+import tests.mock as mock
 
 
 def bufsized(sock, size=1):
@@ -26,6 +33,15 @@ def bufsized(sock, size=1):
     return sock
 
 
+def expect_socket_timeout(function, *args):
+    try:
+        function(*args)
+        raise AssertionError("socket.timeout not raised")
+    except socket.timeout as e:
+        assert hasattr(e, 'args')
+        assert e.args[0] == 'timed out'
+
+
 def min_buf_size():
     """Return the minimum buffer size that the platform supports."""
     test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -34,44 +50,41 @@ def min_buf_size():
 
 
 def using_epoll_hub(_f):
-        try:
-            return 'epolls' in type(get_hub()).__module__
-        except Exception:
-            return False
+    try:
+        return 'epolls' in type(get_hub()).__module__
+    except Exception:
+        return False
 
 
 def using_kqueue_hub(_f):
-        try:
-            return 'kqueue' in type(get_hub()).__module__
-        except Exception:
-            return False
+    try:
+        return 'kqueue' in type(get_hub()).__module__
+    except Exception:
+        return False
 
 
-class TestGreenSocket(LimitedTestCase):
+class TestGreenSocket(tests.LimitedTestCase):
     def assertWriteToClosedFileRaises(self, fd):
         if sys.version_info[0] < 3:
             # 2.x socket._fileobjects are odd: writes don't check
             # whether the socket is closed or not, and you get an
             # AttributeError during flush if it is closed
-            fd.write('a')
+            fd.write(b'a')
             self.assertRaises(Exception, fd.flush)
         else:
             # 3.x io write to closed file-like pbject raises ValueError
-            self.assertRaises(ValueError, fd.write, 'a')
+            self.assertRaises(ValueError, fd.write, b'a')
 
     def test_connect_timeout(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(0.1)
         gs = greenio.GreenSocket(s)
+
         try:
-            gs.connect(('192.0.2.1', 80))
-            self.fail("socket.timeout not raised")
-        except socket.timeout, e:
-            self.assert_(hasattr(e, 'args'))
-            self.assertEqual(e.args[0], 'timed out')
-        except socket.error, e:
+            expect_socket_timeout(gs.connect, ('192.0.2.1', 80))
+        except OSError as e:
             # unreachable is also a valid outcome
-            if not get_errno(e) in (errno.EHOSTUNREACH, errno.ENETUNREACH):
+            if get_errno(e) not in (errno.EHOSTUNREACH, errno.ENETUNREACH):
                 raise
 
     def test_accept_timeout(self):
@@ -81,20 +94,15 @@ class TestGreenSocket(LimitedTestCase):
 
         s.settimeout(0.1)
         gs = greenio.GreenSocket(s)
-        try:
-            gs.accept()
-            self.fail("socket.timeout not raised")
-        except socket.timeout, e:
-            self.assert_(hasattr(e, 'args'))
-            self.assertEqual(e.args[0], 'timed out')
+        expect_socket_timeout(gs.accept)
 
     def test_connect_ex_timeout(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(0.1)
         gs = greenio.GreenSocket(s)
         e = gs.connect_ex(('192.0.2.1', 80))
-        if not e in (errno.EHOSTUNREACH, errno.ENETUNREACH):
-            self.assertEquals(e, errno.EAGAIN)
+        if e not in (errno.EHOSTUNREACH, errno.ENETUNREACH):
+            self.assertEqual(e, errno.EAGAIN)
 
     def test_recv_timeout(self):
         listener = greenio.GreenSocket(socket.socket())
@@ -117,12 +125,8 @@ class TestGreenSocket(LimitedTestCase):
 
         client.connect(addr)
 
-        try:
-            client.recv(8192)
-            self.fail("socket.timeout not raised")
-        except socket.timeout, e:
-            self.assert_(hasattr(e, 'args'))
-            self.assertEqual(e.args[0], 'timed out')
+        expect_socket_timeout(client.recv, 0)
+        expect_socket_timeout(client.recv, 8192)
 
         evt.send()
         gt.wait()
@@ -133,30 +137,21 @@ class TestGreenSocket(LimitedTestCase):
         gs.settimeout(.1)
         gs.bind(('', 0))
 
-        try:
-            gs.recvfrom(8192)
-            self.fail("socket.timeout not raised")
-        except socket.timeout, e:
-            self.assert_(hasattr(e, 'args'))
-            self.assertEqual(e.args[0], 'timed out')
+        expect_socket_timeout(gs.recvfrom, 0)
+        expect_socket_timeout(gs.recvfrom, 8192)
 
     def test_recvfrom_into_timeout(self):
-        buf = buffer(array.array('B'))
+        buf = array.array('B')
 
         gs = greenio.GreenSocket(
             socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
         gs.settimeout(.1)
         gs.bind(('', 0))
 
-        try:
-            gs.recvfrom_into(buf)
-            self.fail("socket.timeout not raised")
-        except socket.timeout, e:
-            self.assert_(hasattr(e, 'args'))
-            self.assertEqual(e.args[0], 'timed out')
+        expect_socket_timeout(gs.recvfrom_into, buf)
 
     def test_recv_into_timeout(self):
-        buf = buffer(array.array('B'))
+        buf = array.array('B')
 
         listener = greenio.GreenSocket(socket.socket())
         listener.bind(('', 0))
@@ -178,12 +173,7 @@ class TestGreenSocket(LimitedTestCase):
 
         client.connect(addr)
 
-        try:
-            client.recv_into(buf)
-            self.fail("socket.timeout not raised")
-        except socket.timeout, e:
-            self.assert_(hasattr(e, 'args'))
-            self.assertEqual(e.args[0], 'timed out')
+        expect_socket_timeout(client.recv_into, buf)
 
         evt.send()
         gt.wait()
@@ -206,19 +196,17 @@ class TestGreenSocket(LimitedTestCase):
 
         client = bufsized(greenio.GreenSocket(socket.socket()))
         client.connect(addr)
-        try:
-            client.settimeout(0.00001)
-            msg = s2b("A") * 100000  # large enough number to overwhelm most buffers
 
-            total_sent = 0
-            # want to exceed the size of the OS buffer so it'll block in a
-            # single send
+        client.settimeout(0.00001)
+        msg = b"A" * 100000  # large enough number to overwhelm most buffers
+
+        # want to exceed the size of the OS buffer so it'll block in a
+        # single send
+        def send():
             for x in range(10):
-                total_sent += client.send(msg)
-            self.fail("socket.timeout not raised")
-        except socket.timeout, e:
-            self.assert_(hasattr(e, 'args'))
-            self.assertEqual(e.args[0], 'timed out')
+                client.send(msg)
+
+        expect_socket_timeout(send)
 
         evt.send()
         gt.wait()
@@ -243,15 +231,9 @@ class TestGreenSocket(LimitedTestCase):
         client.settimeout(0.1)
         client.connect(addr)
 
-        try:
-            msg = s2b("A") * (8 << 20)
-
-            # want to exceed the size of the OS buffer so it'll block
-            client.sendall(msg)
-            self.fail("socket.timeout not raised")
-        except socket.timeout, e:
-            self.assert_(hasattr(e, 'args'))
-            self.assertEqual(e.args[0], 'timed out')
+        # want to exceed the size of the OS buffer so it'll block
+        msg = b"A" * (8 << 20)
+        expect_socket_timeout(client.sendall, msg)
 
         evt.send()
         gt.wait()
@@ -262,12 +244,12 @@ class TestGreenSocket(LimitedTestCase):
             # by closing the socket prior to using the made file
             try:
                 conn, addr = listener.accept()
-                fd = conn.makefile('w')
+                fd = conn.makefile('wb')
                 conn.close()
-                fd.write('hello\n')
+                fd.write(b'hello\n')
                 fd.close()
                 self.assertWriteToClosedFileRaises(fd)
-                self.assertRaises(socket.error, conn.send, s2b('b'))
+                self.assertRaises(socket.error, conn.send, b'b')
             finally:
                 listener.close()
 
@@ -276,23 +258,23 @@ class TestGreenSocket(LimitedTestCase):
             # by closing the made file and then sending a character
             try:
                 conn, addr = listener.accept()
-                fd = conn.makefile('w')
-                fd.write('hello')
+                fd = conn.makefile('wb')
+                fd.write(b'hello')
                 fd.close()
-                conn.send(s2b('\n'))
+                conn.send(b'\n')
                 conn.close()
                 self.assertWriteToClosedFileRaises(fd)
-                self.assertRaises(socket.error, conn.send, s2b('b'))
+                self.assertRaises(socket.error, conn.send, b'b')
             finally:
                 listener.close()
 
         def did_it_work(server):
             client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client.connect(('127.0.0.1', server.getsockname()[1]))
-            fd = client.makefile()
+            fd = client.makefile('rb')
             client.close()
-            assert fd.readline() == 'hello\n'
-            assert fd.read() == ''
+            assert fd.readline() == b'hello\n'
+            assert fd.read() == b''
             fd.close()
 
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -318,9 +300,10 @@ class TestGreenSocket(LimitedTestCase):
             # closing the file object should close everything
             try:
                 conn, addr = listener.accept()
-                conn = conn.makefile('w')
-                conn.write('hello\n')
+                conn = conn.makefile('wb')
+                conn.write(b'hello\n')
                 conn.close()
+                gc.collect()
                 self.assertWriteToClosedFileRaises(conn)
             finally:
                 listener.close()
@@ -332,15 +315,79 @@ class TestGreenSocket(LimitedTestCase):
         killer = eventlet.spawn(accept_once, server)
         client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         client.connect(('127.0.0.1', server.getsockname()[1]))
-        fd = client.makefile()
+        fd = client.makefile('rb')
         client.close()
-        assert fd.read() == 'hello\n'
-        assert fd.read() == ''
+        assert fd.read() == b'hello\n'
+        assert fd.read() == b''
 
         killer.wait()
 
+    def test_blocking_accept_mark_as_reopened(self):
+        evt_hub = get_hub()
+        with mock.patch.object(evt_hub, "mark_as_reopened") as patched_mark_as_reopened:
+            def connect_once(listener):
+                # delete/overwrite the original conn
+                # object, only keeping the file object around
+                # closing the file object should close everything
+                client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                client.connect(('127.0.0.1', listener.getsockname()[1]))
+                client.close()
+
+            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server.bind(('127.0.0.1', 0))
+            server.listen(50)
+            acceptlet = eventlet.spawn(connect_once, server)
+            conn, addr = server.accept()
+            conn.sendall(b'hello\n')
+            connfileno = conn.fileno()
+            conn.close()
+            assert patched_mark_as_reopened.called
+            assert patched_mark_as_reopened.call_count == 3, "3 fds were opened, but the hub was " \
+                                                             "only notified {call_count} times" \
+                .format(call_count=patched_mark_as_reopened.call_count)
+            args, kwargs = patched_mark_as_reopened.call_args
+            assert args == (connfileno,), "Expected mark_as_reopened to be called " \
+                                          "with {expected_fileno}, but it was called " \
+                                          "with {fileno}".format(expected_fileno=connfileno,
+                                                                 fileno=args[0])
+        server.close()
+
+    def test_nonblocking_accept_mark_as_reopened(self):
+        evt_hub = get_hub()
+        with mock.patch.object(evt_hub, "mark_as_reopened") as patched_mark_as_reopened:
+            def connect_once(listener):
+                # delete/overwrite the original conn
+                # object, only keeping the file object around
+                # closing the file object should close everything
+                client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                client.connect(('127.0.0.1', listener.getsockname()[1]))
+                client.close()
+
+            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server.bind(('127.0.0.1', 0))
+            server.listen(50)
+            server.setblocking(False)
+            acceptlet = eventlet.spawn(connect_once, server)
+            out = select.select([server], [], [])
+            conn, addr = server.accept()
+            conn.sendall(b'hello\n')
+            connfileno = conn.fileno()
+            conn.close()
+            assert patched_mark_as_reopened.called
+            assert patched_mark_as_reopened.call_count == 3, "3 fds were opened, but the hub was " \
+                                                             "only notified {call_count} times" \
+                .format(call_count=patched_mark_as_reopened.call_count)
+            args, kwargs = patched_mark_as_reopened.call_args
+            assert args == (connfileno,), "Expected mark_as_reopened to be called " \
+                                          "with {expected_fileno}, but it was called " \
+                                          "with {fileno}".format(expected_fileno=connfileno,
+                                                                 fileno=args[0])
+        server.close()
+
     def test_full_duplex(self):
-        large_data = s2b('*') * 10 * min_buf_size()
+        large_data = b'*' * 10 * min_buf_size()
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind(('127.0.0.1', 0))
@@ -354,7 +401,7 @@ class TestGreenSocket(LimitedTestCase):
             result = sock.recv(len(large_data))
             while len(result) < len(large_data):
                 result += sock.recv(len(large_data))
-            self.assertEquals(result, large_data)
+            self.assertEqual(result, large_data)
 
         def server():
             (sock, addr) = listener.accept()
@@ -362,19 +409,19 @@ class TestGreenSocket(LimitedTestCase):
             send_large_coro = eventlet.spawn(send_large, sock)
             eventlet.sleep(0)
             result = sock.recv(10)
-            expected = s2b('hello world')
+            expected = b'hello world'
             while len(result) < len(expected):
                 result += sock.recv(10)
-            self.assertEquals(result, expected)
+            self.assertEqual(result, expected)
             send_large_coro.wait()
 
         server_evt = eventlet.spawn(server)
         client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client.connect(('127.0.0.1', listener.getsockname()[1]))
         bufsized(client)
+        client.connect(('127.0.0.1', listener.getsockname()[1]))
         large_evt = eventlet.spawn(read_large, client)
         eventlet.sleep(0)
-        client.sendall(s2b('hello world'))
+        client.sendall(b'hello world')
         server_evt.wait()
         large_evt.wait()
         client.close()
@@ -391,8 +438,8 @@ class TestGreenSocket(LimitedTestCase):
             def sender(listener):
                 (sock, addr) = listener.accept()
                 sock = bufsized(sock, size=bufsize)
-                sock.sendall(s2b('x') * many_bytes)
-                sock.sendall(s2b('y') * second_bytes)
+                sock.sendall(b'x' * many_bytes)
+                sock.sendall(b'y' * second_bytes)
 
             listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -423,16 +470,11 @@ class TestGreenSocket(LimitedTestCase):
             test_sendall_impl(how_many)
 
     def test_wrap_socket(self):
-        try:
-            import ssl
-        except ImportError:
-            pass  # pre-2.6
-        else:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.bind(('127.0.0.1', 0))
-            sock.listen(50)
-            ssl.wrap_socket(sock)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(('127.0.0.1', 0))
+        sock.listen(50)
+        ssl.wrap_socket(sock)
 
     def test_timeout_and_final_write(self):
         # This test verifies that a write on a socket that we've
@@ -445,17 +487,18 @@ class TestGreenSocket(LimitedTestCase):
 
         def sender(evt):
             s2, addr = server.accept()
-            wrap_wfile = s2.makefile('w')
+            wrap_wfile = s2.makefile('wb')
 
             eventlet.sleep(0.02)
-            wrap_wfile.write('hi')
+            wrap_wfile.write(b'hi')
             s2.close()
-            evt.send('sent via event')
+            evt.send(b'sent via event')
 
         evt = event.Event()
         eventlet.spawn(sender, evt)
-        eventlet.sleep(0)  # lets the socket enter accept mode, which
-                      # is necessary for connect to succeed on windows
+        # lets the socket enter accept mode, which
+        # is necessary for connect to succeed on windows
+        eventlet.sleep(0)
         try:
             # try and get some data off of this pipe
             # but bail before any is sent
@@ -465,21 +508,20 @@ class TestGreenSocket(LimitedTestCase):
             wrap_rfile = client.makefile()
             wrap_rfile.read(1)
             self.fail()
-        except eventlet.TimeoutError:
+        except eventlet.Timeout:
             pass
 
         result = evt.wait()
-        self.assertEquals(result, 'sent via event')
+        self.assertEqual(result, b'sent via event')
         server.close()
         client.close()
 
-    @skip_with_pyevent
     def test_raised_multiple_readers(self):
         debug.hub_prevent_multiple_readers(True)
 
         def handle(sock, addr):
             sock.recv(1)
-            sock.sendall("a")
+            sock.sendall(b"a")
             raise eventlet.StopServe()
 
         listener = eventlet.listen(('127.0.0.1', 0))
@@ -492,19 +534,21 @@ class TestGreenSocket(LimitedTestCase):
         a = eventlet.spawn(reader, s)
         eventlet.sleep(0)
         self.assertRaises(RuntimeError, s.recv, 1)
-        s.sendall('b')
+        s.sendall(b'b')
         a.wait()
 
-    @skip_with_pyevent
-    @skip_if(using_epoll_hub)
-    @skip_if(using_kqueue_hub)
+    @tests.skip_if(using_epoll_hub)
+    @tests.skip_if(using_kqueue_hub)
     def test_closure(self):
         def spam_to_me(address):
             sock = eventlet.connect(address)
             while True:
                 try:
-                    sock.sendall('hello world')
-                except socket.error, e:
+                    sock.sendall(b'hello world')
+                    # Arbitrary delay to not use all available CPU, keeps the test
+                    # running quickly and reliably under a second
+                    time.sleep(0.001)
+                except OSError as e:
                     if get_errno(e) == errno.EPIPE:
                         return
                     raise
@@ -518,8 +562,11 @@ class TestGreenSocket(LimitedTestCase):
             try:
                 while True:
                     data = client.recv(1024)
-                    self.assert_(data)
-            except socket.error, e:
+                    assert data
+                    # Arbitrary delay to not use all available CPU, keeps the test
+                    # running quickly and reliably under a second
+                    time.sleep(0.001)
+            except OSError as e:
                 # we get an EBADF because client is closed in the same process
                 # (but a different greenthread)
                 if get_errno(e) != errno.EBADF:
@@ -535,7 +582,9 @@ class TestGreenSocket(LimitedTestCase):
 
     def test_invalid_connection(self):
         # find an unused port by creating a socket then closing it
-        port = eventlet.listen(('127.0.0.1', 0)).getsockname()[1]
+        listening_socket = eventlet.listen(('127.0.0.1', 0))
+        port = listening_socket.getsockname()[1]
+        listening_socket.close()
         self.assertRaises(socket.error, eventlet.connect, ('127.0.0.1', port))
 
     def test_zero_timeout_and_back(self):
@@ -553,7 +602,7 @@ class TestGreenSocket(LimitedTestCase):
         try:
             client.recv(1)
             assert False
-        except socket.error, e:
+        except OSError as e:
             assert get_errno(e) == errno.EAGAIN
 
         client.settimeout(0.05)
@@ -583,17 +632,20 @@ class TestGreenSocket(LimitedTestCase):
         sock1 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         fd = sock1.fd.fileno()
         flags = fcntl.fcntl(fd, fcntl.F_GETFL)
-        flags = fcntl.fcntl(fd, fcntl.F_SETFL, flags & ~os.O_NONBLOCK)
-        assert flags & os.O_NONBLOCK == 0
+        # on SPARC, nonblocking mode sets O_NDELAY as well
+        fcntl.fcntl(fd, fcntl.F_SETFL, flags & ~(os.O_NONBLOCK
+                                                 | os.O_NDELAY))
+        flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+        assert flags & (os.O_NONBLOCK | os.O_NDELAY) == 0
 
         sock2 = socket.socket(sock1.fd, set_nonblocking=False)
         flags = fcntl.fcntl(sock2.fd.fileno(), fcntl.F_GETFL)
-        assert flags & os.O_NONBLOCK == 0
+        assert flags & (os.O_NONBLOCK | os.O_NDELAY) == 0
 
     def test_sockopt_interface(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR) == 0
-        assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) == '\000'
+        assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) == b'\000'
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
     def test_socketpair_select(self):
@@ -602,9 +654,65 @@ class TestGreenSocket(LimitedTestCase):
         assert select.select([], [s1], [], 0) == ([], [s1], [])
         assert select.select([], [s1], [], 0) == ([], [s1], [])
 
+    def test_shutdown_safe(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.close()
+        # should not raise
+        greenio.shutdown_safe(sock)
 
-class TestGreenPipe(LimitedTestCase):
-    @skip_on_windows
+    def test_datagram_socket_operations_work(self):
+        receiver = greenio.GreenSocket(socket.AF_INET, socket.SOCK_DGRAM)
+        receiver.bind(('127.0.0.1', 0))
+        address = receiver.getsockname()
+
+        sender = greenio.GreenSocket(socket.AF_INET, socket.SOCK_DGRAM)
+
+        # Two ways sendto can be called
+        sender.sendto(b'first', address)
+        sender.sendto(b'second', 0, address)
+
+        sender_address = ('127.0.0.1', sender.getsockname()[1])
+        assert receiver.recvfrom(1024) == (b'first', sender_address)
+        assert receiver.recvfrom(1024) == (b'second', sender_address)
+
+
+def test_get_fileno_of_a_socket_works():
+    class DummySocket:
+        def fileno(self):
+            return 123
+    assert select.get_fileno(DummySocket()) == 123
+
+
+def test_get_fileno_of_an_int_works():
+    assert select.get_fileno(123) == 123
+
+
+expected_get_fileno_type_error_message = 'Expected int or long, got <class \'str\'>'
+
+
+def test_get_fileno_of_wrong_type_fails():
+    try:
+        select.get_fileno('foo')
+    except TypeError as ex:
+        assert str(ex) == expected_get_fileno_type_error_message
+    else:
+        assert False, 'Expected TypeError not raised'
+
+
+def test_get_fileno_of_a_socket_with_fileno_returning_wrong_type_fails():
+    class DummySocket:
+        def fileno(self):
+            return 'foo'
+    try:
+        select.get_fileno(DummySocket())
+    except TypeError as ex:
+        assert str(ex) == expected_get_fileno_type_error_message
+    else:
+        assert False, 'Expected TypeError not raised'
+
+
+class TestGreenPipe(tests.LimitedTestCase):
+    @tests.skip_on_windows
     def setUp(self):
         super(self.__class__, self).setUp()
         self.tempdir = tempfile.mkdtemp('_green_pipe_test')
@@ -615,22 +723,22 @@ class TestGreenPipe(LimitedTestCase):
 
     def test_pipe(self):
         r, w = os.pipe()
-        rf = greenio.GreenPipe(r, 'r')
-        wf = greenio.GreenPipe(w, 'w', 0)
+        rf = greenio.GreenPipe(r, 'rb')
+        wf = greenio.GreenPipe(w, 'wb', 0)
 
         def sender(f, content):
-            for ch in content:
+            for ch in map(struct.Struct(">B").pack, iter(content)):
                 eventlet.sleep(0.0001)
                 f.write(ch)
             f.close()
 
-        one_line = "12345\n"
+        one_line = b"12345\n"
         eventlet.spawn(sender, wf, one_line * 5)
-        for i in xrange(5):
+        for i in range(5):
             line = rf.readline()
             eventlet.sleep(0.01)
-            self.assertEquals(line, one_line)
-        self.assertEquals(rf.readline(), '')
+            self.assertEqual(line, one_line)
+        self.assertEqual(rf.readline(), b'')
 
     def test_pipe_read(self):
         # ensure that 'readline' works properly on GreenPipes when data is not
@@ -638,16 +746,16 @@ class TestGreenPipe(LimitedTestCase):
         # also ensures that readline() terminates on '\n' and '\r\n'
         r, w = os.pipe()
 
-        r = greenio.GreenPipe(r)
-        w = greenio.GreenPipe(w, 'w')
+        r = greenio.GreenPipe(r, 'rb')
+        w = greenio.GreenPipe(w, 'wb')
 
         def writer():
             eventlet.sleep(.1)
 
-            w.write('line\n')
+            w.write(b'line\n')
             w.flush()
 
-            w.write('line\r\n')
+            w.write(b'line\r\n')
             w.flush()
 
         gt = eventlet.spawn(writer)
@@ -655,20 +763,54 @@ class TestGreenPipe(LimitedTestCase):
         eventlet.sleep(0)
 
         line = r.readline()
-        self.assertEquals(line, 'line\n')
+        self.assertEqual(line, b'line\n')
 
         line = r.readline()
-        self.assertEquals(line, 'line\r\n')
+        self.assertEqual(line, b'line\r\n')
 
         gt.wait()
+
+    def test_pip_read_until_end(self):
+        # similar to test_pip_read above but reading until eof
+        r, w = os.pipe()
+
+        r = greenio.GreenPipe(r, 'rb')
+        w = greenio.GreenPipe(w, 'wb')
+        data = b'abcd' * (DEFAULT_BUFFER_SIZE // 2)
+
+        # We can't just write lots of data, it might "block", so run in a
+        # greenlet:
+        def write():
+            w.write(data)
+            w.close()
+        eventlet.spawn(write)
+
+        buf = r.read()  # no chunk size specified; read until end
+        self.assertEqual(buf, data)
+
+    def test_pipe_read_unbuffered(self):
+        # Ensure that seting the buffer size works properly on GreenPipes,
+        # it used to be ignored on Python 2 and the test would hang on r.readline()
+        # below.
+        r, w = os.pipe()
+
+        r = greenio.GreenPipe(r, 'rb', 0)
+        w = greenio.GreenPipe(w, 'wb', 0)
+
+        w.write(b'line\n')
+
+        line = r.readline()
+        self.assertEqual(line, b'line\n')
+        r.close()
+        w.close()
 
     def test_pipe_writes_large_messages(self):
         r, w = os.pipe()
 
-        r = greenio.GreenPipe(r)
-        w = greenio.GreenPipe(w, 'w')
+        r = greenio.GreenPipe(r, 'rb')
+        w = greenio.GreenPipe(w, 'wb')
 
-        large_message = "".join([1024 * chr(i) for i in xrange(65)])
+        large_message = b"".join([1024 * bytes((i,)) for i in range(65)])
 
         def writer():
             w.write(large_message)
@@ -676,50 +818,56 @@ class TestGreenPipe(LimitedTestCase):
 
         gt = eventlet.spawn(writer)
 
-        for i in xrange(65):
+        for i in range(65):
             buf = r.read(1024)
-            expected = 1024 * chr(i)
-            self.assertEquals(buf, expected,
+            expected = 1024 * bytes((i,))
+            self.assertEqual(
+                buf, expected,
                 "expected=%r..%r, found=%r..%r iter=%d"
                 % (expected[:4], expected[-4:], buf[:4], buf[-4:], i))
         gt.wait()
 
     def test_seek_on_buffered_pipe(self):
-        f = greenio.GreenPipe(self.tempdir + "/TestFile", 'w+', 1024)
-        self.assertEquals(f.tell(), 0)
+        f = greenio.GreenPipe(self.tempdir + "/TestFile", 'wb+', 1024)
+        self.assertEqual(f.tell(), 0)
         f.seek(0, 2)
-        self.assertEquals(f.tell(), 0)
-        f.write('1234567890')
+        self.assertEqual(f.tell(), 0)
+        f.write(b'1234567890')
         f.seek(0, 2)
-        self.assertEquals(f.tell(), 10)
+        self.assertEqual(f.tell(), 10)
         f.seek(0)
         value = f.read(1)
-        self.assertEqual(value, '1')
-        self.assertEquals(f.tell(), 1)
+        self.assertEqual(value, b'1')
+        self.assertEqual(f.tell(), 1)
         value = f.read(1)
-        self.assertEqual(value, '2')
-        self.assertEquals(f.tell(), 2)
+        self.assertEqual(value, b'2')
+        self.assertEqual(f.tell(), 2)
         f.seek(0, 1)
-        self.assertEqual(f.readline(), '34567890')
+        self.assertEqual(f.readline(), b'34567890')
         f.seek(-5, 1)
-        self.assertEqual(f.readline(), '67890')
+        self.assertEqual(f.readline(), b'67890')
         f.seek(0)
-        self.assertEqual(f.readline(), '1234567890')
+        self.assertEqual(f.readline(), b'1234567890')
         f.seek(0, 2)
-        self.assertEqual(f.readline(), '')
+        self.assertEqual(f.readline(), b'')
 
     def test_truncate(self):
-        f = greenio.GreenPipe(self.tempdir + "/TestFile", 'w+', 1024)
-        f.write('1234567890')
+        f = greenio.GreenPipe(self.tempdir + "/TestFile", 'wb+', 1024)
+        f.write(b'1234567890')
         f.truncate(9)
-        self.assertEquals(f.tell(), 9)
+        self.assertEqual(f.tell(), 9)
 
 
-class TestGreenIoLong(LimitedTestCase):
+class TestGreenIoLong(tests.LimitedTestCase):
     TEST_TIMEOUT = 10  # the test here might take a while depending on the OS
 
-    @skip_with_pyevent
-    def test_multiple_readers(self, clibufsize=False):
+    def test_multiple_readers(self):
+        from eventlet.hubs.asyncio import Hub
+        if isinstance(get_hub(), Hub):
+            with pytest.raises(RuntimeError):
+                debug.hub_prevent_multiple_readers(False)
+            return
+
         debug.hub_prevent_multiple_readers(False)
         recvsize = 2 * min_buf_size()
         sendsize = 10 * recvsize
@@ -759,118 +907,21 @@ class TestGreenIoLong(LimitedTestCase):
         server_coro = eventlet.spawn(server)
         client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         client.connect(('127.0.0.1', listener.getsockname()[1]))
-        if clibufsize:
-            bufsized(client, size=sendsize)
-        else:
-            bufsized(client)
-        client.sendall(s2b('*') * sendsize)
+        bufsized(client, size=sendsize)
+
+        # Split into multiple chunks so that we can wait a little
+        # every iteration which allows both readers to queue and
+        # recv some data when we actually send it.
+        for i in range(20):
+            eventlet.sleep(0.001)
+            client.sendall(b'*' * (sendsize // 20))
+
         client.close()
         server_coro.wait()
         listener.close()
-        self.assert_(len(results1) > 0)
-        self.assert_(len(results2) > 0)
+        assert len(results1) > 0
+        assert len(results2) > 0
         debug.hub_prevent_multiple_readers()
-
-    @skipped  # by rdw because it fails but it's not clear how to make it pass
-    @skip_with_pyevent
-    def test_multiple_readers2(self):
-        self.test_multiple_readers(clibufsize=True)
-
-
-class TestGreenIoStarvation(LimitedTestCase):
-    # fixme: this doesn't succeed, because of eventlet's predetermined
-    # ordering.  two processes, one with server, one with client eventlets
-    # might be more reliable?
-
-    TEST_TIMEOUT = 300  # the test here might take a while depending on the OS
-
-    @skipped  # by rdw, because it fails but it's not clear how to make it pass
-    @skip_with_pyevent
-    def test_server_starvation(self, sendloops=15):
-        recvsize = 2 * min_buf_size()
-        sendsize = 10000 * recvsize
-
-        results = [[] for i in xrange(5)]
-
-        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        listener.bind(('127.0.0.1', 0))
-        port = listener.getsockname()[1]
-        listener.listen(50)
-
-        base_time = time.time()
-
-        def server(my_results):
-            sock, addr = listener.accept()
-
-            datasize = 0
-
-            t1 = None
-            t2 = None
-            try:
-                while True:
-                    data = sock.recv(recvsize)
-                    if not t1:
-                        t1 = time.time() - base_time
-                    if not data:
-                        t2 = time.time() - base_time
-                        my_results.append(datasize)
-                        my_results.append((t1, t2))
-                        break
-                    datasize += len(data)
-            finally:
-                sock.close()
-
-        def client():
-            pid = os.fork()
-            if pid:
-                return pid
-
-            client = _orig_sock.socket(socket.AF_INET, socket.SOCK_STREAM)
-            client.connect(('127.0.0.1', port))
-
-            bufsized(client, size=sendsize)
-
-            for i in range(sendloops):
-                client.sendall(s2b('*') * sendsize)
-            client.close()
-            os._exit(0)
-
-        clients = []
-        servers = []
-        for r in results:
-            servers.append(eventlet.spawn(server, r))
-        for r in results:
-            clients.append(client())
-
-        for s in servers:
-            s.wait()
-        for c in clients:
-            os.waitpid(c, 0)
-
-        listener.close()
-
-        # now test that all of the server receive intervals overlap, and
-        # that there were no errors.
-        for r in results:
-            assert len(r) == 2, "length is %d not 2!: %s\n%s" % (len(r), r, results)
-            assert r[0] == sendsize * sendloops
-            assert len(r[1]) == 2
-            assert r[1][0] is not None
-            assert r[1][1] is not None
-
-        starttimes = sorted(r[1][0] for r in results)
-        endtimes = sorted(r[1][1] for r in results)
-        runlengths = sorted(r[1][1] - r[1][0] for r in results)
-
-        # assert that the last task started before the first task ended
-        # (our no-starvation condition)
-        assert starttimes[-1] < endtimes[0], "Not overlapping: starts %s ends %s" % (starttimes, endtimes)
-
-        maxstartdiff = starttimes[-1] - starttimes[0]
-
-        assert maxstartdiff * 2 < runlengths[0], "Largest difference in starting times more than twice the shortest running time!"
-        assert runlengths[0] * 2 > runlengths[-1], "Longest runtime more than twice as long as shortest!"
 
 
 def test_set_nonblocking():
@@ -880,8 +931,159 @@ def test_set_nonblocking():
     assert orig_flags & os.O_NONBLOCK == 0
     greenio.set_nonblocking(sock)
     new_flags = fcntl.fcntl(fileno, fcntl.F_GETFL)
-    assert new_flags == (orig_flags | os.O_NONBLOCK)
+    # on SPARC, O_NDELAY is set as well, and it might be a superset
+    # of O_NONBLOCK
+    assert (new_flags == (orig_flags | os.O_NONBLOCK)
+            or new_flags == (orig_flags | os.O_NONBLOCK | os.O_NDELAY))
 
 
-if __name__ == '__main__':
-    main()
+def test_socket_del_fails_gracefully_when_not_fully_initialized():
+    # Regression introduced in da87716714689894f23d0db7b003f26d97031e83, reported in:
+    # * GH #137 https://github.com/eventlet/eventlet/issues/137
+    # * https://bugs.launchpad.net/oslo.messaging/+bug/1369999
+
+    class SocketSubclass(socket.socket):
+
+        def __init__(self):
+            pass
+
+    with tests.capture_stderr() as err:
+        SocketSubclass()
+
+    assert err.getvalue() == ''
+
+
+def test_double_close_219():
+    tests.run_isolated('greenio_double_close_219.py')
+
+
+def test_partial_write_295():
+    # https://github.com/eventlet/eventlet/issues/295
+    # `socket.makefile('w').writelines()` must send all
+    # despite partial writes by underlying socket
+    listen_socket = eventlet.listen(('localhost', 0))
+    original_accept = listen_socket.accept
+
+    def talk(conn):
+        f = conn.makefile('wb')
+        line = b'*' * 2140
+        f.writelines([line] * 10000)
+        conn.close()
+
+    def accept():
+        connection, address = original_accept()
+        original_send = connection.send
+
+        def slow_send(b, *args):
+            b = b[:1031]
+            return original_send(b, *args)
+
+        connection.send = slow_send
+        eventlet.spawn(talk, connection)
+        return connection, address
+
+    listen_socket.accept = accept
+
+    eventlet.spawn(listen_socket.accept)
+    sock = eventlet.connect(listen_socket.getsockname())
+    with eventlet.Timeout(10):
+        bs = sock.makefile('rb').read()
+    assert len(bs) == 21400000
+    assert bs == (b'*' * 21400000)
+
+
+def test_socket_file_read_non_int():
+    listen_socket = eventlet.listen(('localhost', 0))
+
+    def server():
+        conn, _ = listen_socket.accept()
+        conn.recv(1)
+        conn.sendall(b'response')
+        conn.close()
+
+    eventlet.spawn(server)
+    sock = eventlet.connect(listen_socket.getsockname())
+
+    fd = sock.makefile('rwb')
+    fd.write(b'?')
+    fd.flush()
+    with eventlet.Timeout(1):
+        try:
+            fd.read("This shouldn't work")
+            assert False
+        except TypeError:
+            pass
+
+
+def test_pipe_context():
+    # ensure using a pipe as a context actually closes it.
+    r, w = os.pipe()
+    r = greenio.GreenPipe(r)
+    w = greenio.GreenPipe(w, 'w')
+
+    with r:
+        pass
+    assert r.closed and not w.closed
+
+    with w as f:
+        assert f == w
+    assert r.closed and w.closed
+
+
+def test_greenpipe_write():
+    expected = b"initial"
+    with tempfile.NamedTemporaryFile() as f:
+        with greenio.GreenPipe(f.name, "wb") as writer:
+            writer.write(expected)
+
+        actual = tests.read_file(f.name)
+        assert actual == expected
+
+
+def test_greenpipe_append():
+    old_data = b"existing data..."
+    new_data = b"append with mode=a"
+    expected = old_data + new_data
+    with tempfile.NamedTemporaryFile() as f:
+        with open(f.name, "wb") as fw:
+            fw.write(old_data)
+
+        with greenio.GreenPipe(f.name, "ab") as writer:
+            writer.write(new_data)
+
+        actual = tests.read_file(f.name)
+        assert actual == expected
+
+
+def test_greenpipe_read_overwrite():
+    old_data = b"existing data..."
+    new_data = b"overwrite with mode=r+"
+    with tempfile.NamedTemporaryFile() as f:
+        with greenio.GreenPipe(f.name, "wb") as writer:
+            writer.write(old_data)
+
+        with greenio.GreenPipe(f.name, "r+b") as writer:
+            writer.write(new_data)
+
+        actual = tests.read_file(f.name)
+        assert actual == new_data
+
+
+def test_greenpipe_write_plus():
+    expected = "write with mode=w+"
+    with tempfile.NamedTemporaryFile() as f:
+        with greenio.GreenPipe(f.name, "w+") as writer:
+            writer.write(expected)
+
+        actual = tests.read_file(f.name, mode='r')
+        assert actual == expected
+
+
+def test_greenpipe_append_plus():
+    expected = "append with mode=a+"
+    with tempfile.NamedTemporaryFile() as f:
+        with greenio.GreenPipe(f.name, "a+") as writer:
+            writer.write(expected)
+
+        actual = tests.read_file(f.name, mode='r')
+        assert actual == expected

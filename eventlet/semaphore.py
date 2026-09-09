@@ -1,10 +1,10 @@
-from __future__ import with_statement
-from eventlet import greenthread
+import collections
+
+import eventlet
 from eventlet import hubs
-from eventlet.timeout import Timeout
 
 
-class Semaphore(object):
+class Semaphore:
 
     """An unbounded semaphore.
     Optionally initialize with a resource *count*, then :meth:`acquire` and
@@ -31,11 +31,16 @@ class Semaphore(object):
     """
 
     def __init__(self, value=1):
-        self.counter = value
+        try:
+            value = int(value)
+        except ValueError as e:
+            msg = 'Semaphore() expect value :: int, actual: {} {}'.format(type(value), str(e))
+            raise TypeError(msg)
         if value < 0:
-            raise ValueError("Semaphore must be initialized with a positive "
-                             "number, got %s" % value)
-        self._waiters = set()
+            msg = 'Semaphore() expect value >= 0, actual: {}'.format(repr(value))
+            raise ValueError(msg)
+        self.counter = value
+        self._waiters = collections.deque()
 
     def __repr__(self):
         params = (self.__class__.__name__, hex(id(self)),
@@ -75,27 +80,54 @@ class Semaphore(object):
         When invoked with blocking set to false, do not block. If a call without
         an argument would block, return false immediately; otherwise, do the
         same thing as when called without arguments, and return true.
+
+        Timeout value must be strictly positive.
         """
-        if not blocking and timeout is not None:
-            raise ValueError("can't specify timeout for non-blocking acquire")
+        if timeout == -1:
+            timeout = None
+        if timeout is not None and timeout < 0:
+            raise ValueError("timeout value must be strictly positive")
+        if not blocking:
+            if timeout is not None:
+                raise ValueError("can't specify timeout for non-blocking acquire")
+            timeout = 0
         if not blocking and self.locked():
             return False
-        if self.counter <= 0:
-            self._waiters.add(greenthread.getcurrent())
+
+        try:
+            current_thread = eventlet.getcurrent()
+        except RuntimeError:
+            if self.counter > 0:
+                self.counter -= 1
+                return True
+            return False
+
+        if self.counter <= 0 or self._waiters:
+            if current_thread not in self._waiters:
+                self._waiters.append(current_thread)
             try:
                 if timeout is not None:
                     ok = False
-                    with Timeout(timeout, False):
+                    with eventlet.Timeout(timeout, False):
                         while self.counter <= 0:
                             hubs.get_hub().switch()
                         ok = True
                     if not ok:
                         return False
                 else:
-                    while self.counter <= 0:
+                    # If someone else is already in this wait loop, give them
+                    # a chance to get out.
+                    while True:
                         hubs.get_hub().switch()
+                        if self.counter > 0:
+                            break
             finally:
-                self._waiters.discard(greenthread.getcurrent())
+                try:
+                    self._waiters.remove(current_thread)
+                except ValueError:
+                    # Fine if its already been dropped.
+                    pass
+
         self.counter -= 1
         return True
 
@@ -117,7 +149,7 @@ class Semaphore(object):
 
     def _do_acquire(self):
         if self._waiters and self.counter > 0:
-            waiter = self._waiters.pop()
+            waiter = self._waiters.popleft()
             waiter.switch()
 
     def __exit__(self, typ, val, tb):
@@ -150,7 +182,7 @@ class BoundedSemaphore(Semaphore):
     """
 
     def __init__(self, value=1):
-        super(BoundedSemaphore, self).__init__(value)
+        super().__init__(value)
         self.original_counter = value
 
     def release(self, blocking=True):
@@ -163,11 +195,11 @@ class BoundedSemaphore(Semaphore):
         and is ignored
         """
         if self.counter >= self.original_counter:
-            raise ValueError, "Semaphore released too many times"
-        return super(BoundedSemaphore, self).release(blocking)
+            raise ValueError("Semaphore released too many times")
+        return super().release(blocking)
 
 
-class CappedSemaphore(object):
+class CappedSemaphore:
 
     """A blockingly bounded semaphore.
 

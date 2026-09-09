@@ -1,6 +1,12 @@
+import inspect
+import functools
 import sys
+import warnings
 
 from eventlet.support import greenlets
+
+
+_MISSING = object()
 
 
 def get_errno(exc):
@@ -14,7 +20,8 @@ def get_errno(exc):
     """
 
     try:
-        if exc.errno is not None: return exc.errno
+        if exc.errno is not None:
+            return exc.errno
     except AttributeError:
         pass
     try:
@@ -22,19 +29,41 @@ def get_errno(exc):
     except IndexError:
         return None
 
-if sys.version_info[0]<3 and not greenlets.preserves_excinfo:
-    from sys import exc_clear as clear_sys_exc_info
-else:
-    def clear_sys_exc_info():
-        """No-op In py3k. 
-        Exception information is not visible outside of except statements.
-        sys.exc_clear became obsolete and removed."""
-        pass
 
-if sys.version_info[0]==2 and sys.version_info[1]<5:
-    class BaseException:                      # pylint: disable-msg=W0622
-        # not subclassing from object() intentionally, because in
-        # that case "raise Timeout" fails with TypeError.
-        pass
+if sys.version_info[0] < 3:
+    def bytes_to_str(b, encoding='ascii'):
+        return b
 else:
-    from __builtin__ import BaseException
+    def bytes_to_str(b, encoding='ascii'):
+        return b.decode(encoding)
+
+PY33 = sys.version_info[:2] == (3, 3)
+
+
+def wrap_deprecated(old, new):
+    def _resolve(s):
+        return 'eventlet.'+s if '.' not in s else s
+    msg = '''\
+{old} is deprecated and will be removed in next version. Use {new} instead.
+Autoupgrade: fgrep -rl '{old}' . |xargs -t sed --in-place='' -e 's/{old}/{new}/'
+'''.format(old=_resolve(old), new=_resolve(new))
+
+    def wrapper(base):
+        klass = None
+        if inspect.isclass(base):
+            class klass(base):
+                pass
+            klass.__name__ = base.__name__
+            klass.__module__ = base.__module__
+
+        @functools.wraps(base)
+        def wrapped(*a, **kw):
+            warnings.warn(msg, DeprecationWarning, stacklevel=5)
+            return base(*a, **kw)
+
+        if klass is not None:
+            klass.__init__ = wrapped
+            return klass
+
+        return wrapped
+    return wrapper

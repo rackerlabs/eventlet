@@ -1,29 +1,36 @@
 """Implements the standard threading module, using greenthreads."""
-from eventlet import patcher
+import eventlet
 from eventlet.green import thread
 from eventlet.green import time
 from eventlet.support import greenlets as greenlet
 
-__patched__ = ['_start_new_thread', '_allocate_lock', '_get_ident', '_sleep',
-               'local', 'stack_size', 'Lock', 'currentThread',
-               'current_thread', '_after_fork', '_shutdown']
+__patched__ = ['Lock', '_allocate_lock', '_get_main_thread_ident',
+               '_make_thread_handle', '_shutdown', '_sleep',
+               '_start_joinable_thread', '_start_new_thread', '_ThreadHandle',
+               'currentThread', 'current_thread', 'local', 'stack_size',
+               "_active", "_limbo"]
 
-__orig_threading = patcher.original('threading')
+__patched__ += ['get_ident', '_set_sentinel']
+
+__orig_threading = eventlet.patcher.original('threading')
 __threadlocal = __orig_threading.local()
+__patched_enumerate = None
 
 
-patcher.inject('threading',
+eventlet.patcher.inject(
+    'threading',
     globals(),
-    ('thread', thread),
+    ('_thread', thread),
     ('time', time))
-
-del patcher
 
 
 _count = 1
-class _GreenThread(object):
+
+
+class _GreenThread:
     """Wrapper for GreenThread objects to provide Thread-like attributes
     and methods"""
+
     def __init__(self, g):
         global _count
         self._g = g
@@ -61,6 +68,7 @@ class _GreenThread(object):
 
 __threading = None
 
+
 def _fixup_thread(t):
     # Some third-party packages (lockfile) will try to patch the
     # threading.Thread class with a get_name attribute if it doesn't
@@ -73,12 +81,13 @@ def _fixup_thread(t):
         __threading = __import__('threading')
 
     if (hasattr(__threading.Thread, 'get_name') and
-        not hasattr(t, 'get_name')):
+            not hasattr(t, 'get_name')):
         t.get_name = t.getName
     return t
 
 
 def current_thread():
+    global __patched_enumerate
     g = greenlet.getcurrent()
     if not g:
         # Not currently in a greenthread, fall back to standard function
@@ -88,23 +97,37 @@ def current_thread():
         active = __threadlocal.active
     except AttributeError:
         active = __threadlocal.active = {}
-    
+
+    g_id = id(g)
+    t = active.get(g_id)
+    if t is not None:
+        return t
+
+    # FIXME: move import from function body to top
+    # (jaketesler@github) Furthermore, I was unable to have the current_thread() return correct results from
+    # threading.enumerate() unless the enumerate() function was a) imported at runtime using the gross __import__() call
+    # and b) was hot-patched using patch_function().
+    # https://github.com/eventlet/eventlet/issues/172#issuecomment-379421165
+    if __patched_enumerate is None:
+        __patched_enumerate = eventlet.patcher.patch_function(__import__('threading').enumerate)
+    found = [th for th in __patched_enumerate() if th.ident == g_id]
+    if found:
+        return found[0]
+
+    # Add green thread to active if we can clean it up on exit
+    def cleanup(g):
+        del active[g_id]
     try:
-        t = active[id(g)]
-    except KeyError:
-        # Add green thread to active if we can clean it up on exit
-        def cleanup(g):
-            del active[id(g)]
-        try:
-            g.link(cleanup)
-        except AttributeError:
-            # Not a GreenThread type, so there's no way to hook into
-            # the green thread exiting. Fall back to the standard
-            # function then.
-            t = _fixup_thread(__orig_threading.currentThread())
-        else:
-            t = active[id(g)] = _GreenThread(g)
+        g.link(cleanup)
+    except AttributeError:
+        # Not a GreenThread type, so there's no way to hook into
+        # the green thread exiting. Fall back to the standard
+        # function then.
+        t = _fixup_thread(__orig_threading.current_thread())
+    else:
+        t = active[g_id] = _GreenThread(g)
 
     return t
+
 
 currentThread = current_thread

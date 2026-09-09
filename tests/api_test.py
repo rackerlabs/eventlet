@@ -1,36 +1,22 @@
-import os
-import os.path
-import socket
-from unittest import TestCase, main
-import warnings
-
 import eventlet
-warnings.simplefilter('ignore', DeprecationWarning)
-from eventlet import api
-warnings.simplefilter('default', DeprecationWarning)
-from eventlet import greenio, util, hubs, greenthread, spawn
-
-from tests import skip_if_no_ssl
+from eventlet import greenio, hubs, greenthread
+from eventlet.green import ssl
+import tests
 
 
 def check_hub():
     # Clear through the descriptor queue
-    api.sleep(0)
-    api.sleep(0)
+    eventlet.sleep(0)
+    eventlet.sleep(0)
     hub = hubs.get_hub()
     for nm in 'get_readers', 'get_writers':
         dct = getattr(hub, nm)()
         assert not dct, "hub.%s not empty: %s" % (nm, dct)
-    # Stop the runloop (unless it's twistedhub which does not support that)
-    if not getattr(hub, 'uses_twisted_reactor', None):
-        hub.abort(True)
-        assert not hub.running
+    hub.abort(wait=True)
+    assert not hub.running
 
 
-class TestApi(TestCase):
-
-    certificate_file = os.path.join(os.path.dirname(__file__), 'test_server.crt')
-    private_key_file = os.path.join(os.path.dirname(__file__), 'test_server.key')
+class TestApi(tests.LimitedTestCase):
 
     def test_tcp_listener(self):
         socket = eventlet.listen(('0.0.0.0', 0))
@@ -43,72 +29,74 @@ class TestApi(TestCase):
         def accept_once(listenfd):
             try:
                 conn, addr = listenfd.accept()
-                fd = conn.makefile(mode='w')
+                fd = conn.makefile(mode='wb')
                 conn.close()
-                fd.write('hello\n')
+                fd.write(b'hello\n')
                 fd.close()
             finally:
                 listenfd.close()
 
         server = eventlet.listen(('0.0.0.0', 0))
-        api.spawn(accept_once, server)
+        eventlet.spawn_n(accept_once, server)
 
         client = eventlet.connect(('127.0.0.1', server.getsockname()[1]))
-        fd = client.makefile()
+        fd = client.makefile('rb')
         client.close()
-        assert fd.readline() == 'hello\n'
-
-        assert fd.read() == ''
+        assert fd.readline() == b'hello\n'
+        assert fd.read() == b''
         fd.close()
 
         check_hub()
 
-    @skip_if_no_ssl
+    @tests.skip_if_no_ssl
     def test_connect_ssl(self):
         def accept_once(listenfd):
             try:
                 conn, addr = listenfd.accept()
-                conn.write('hello\r\n')
+                conn.write(b'hello\r\n')
                 greenio.shutdown_safe(conn)
                 conn.close()
             finally:
                 greenio.shutdown_safe(listenfd)
                 listenfd.close()
 
-        server = api.ssl_listener(('0.0.0.0', 0),
-                                  self.certificate_file,
-                                  self.private_key_file)
-        api.spawn(accept_once, server)
+        server = eventlet.wrap_ssl(
+            eventlet.listen(('0.0.0.0', 0)),
+            tests.private_key_file,
+            tests.certificate_file,
+            server_side=True
+        )
+        eventlet.spawn_n(accept_once, server)
 
         raw_client = eventlet.connect(('127.0.0.1', server.getsockname()[1]))
-        client = util.wrap_ssl(raw_client)
-        fd = socket._fileobject(client, 'rb', 8192)
+        client = ssl.wrap_socket(raw_client)
+        fd = client.makefile('rb', 8192)
 
-        assert fd.readline() == 'hello\r\n'
+        assert fd.readline() == b'hello\r\n'
         try:
-            self.assertEquals('', fd.read(10))
+            self.assertEqual(b'', fd.read(10))
         except greenio.SSL.ZeroReturnError:
             # if it's a GreenSSL object it'll do this
             pass
         greenio.shutdown_safe(client)
         client.close()
-        
+
         check_hub()
 
     def test_001_trampoline_timeout(self):
-        from eventlet import coros
         server_sock = eventlet.listen(('127.0.0.1', 0))
         bound_port = server_sock.getsockname()[1]
+
         def server(sock):
             client, addr = sock.accept()
-            api.sleep(0.1)
-        server_evt = spawn(server, server_sock)
-        api.sleep(0)
+            eventlet.sleep(0.1)
+        server_evt = eventlet.spawn(server, server_sock)
+        eventlet.sleep(0)
         try:
             desc = eventlet.connect(('127.0.0.1', bound_port))
-            api.trampoline(desc, read=True, write=False, timeout=0.001)
-        except api.TimeoutError:
-            pass # test passed
+            hubs.trampoline(desc, read=True, write=False, timeout=0.001)
+        except eventlet.Timeout:
+            pass  # test passed
         else:
             assert False, "Didn't timeout"
 
@@ -120,6 +108,7 @@ class TestApi(TestCase):
         bound_port = server.getsockname()[1]
 
         done = [False]
+
         def client_closer(sock):
             while True:
                 (conn, addr) = sock.accept()
@@ -128,8 +117,8 @@ class TestApi(TestCase):
         def go():
             desc = eventlet.connect(('127.0.0.1', bound_port))
             try:
-                api.trampoline(desc, read=True, timeout=0.1)
-            except api.TimeoutError:
+                hubs.trampoline(desc, read=True, timeout=0.1)
+            except eventlet.Timeout:
                 assert False, "Timed out"
 
             server.close()
@@ -138,58 +127,64 @@ class TestApi(TestCase):
 
         greenthread.spawn_after_local(0, go)
 
-        server_coro = api.spawn(client_closer, server)
+        server_coro = eventlet.spawn(client_closer, server)
         while not done[0]:
-            api.sleep(0)
-        api.kill(server_coro)
+            eventlet.sleep(0)
+        eventlet.kill(server_coro)
 
         check_hub()
 
-    def test_named(self):
-        named_foo = api.named('tests.api_test.Foo')
-        self.assertEquals(
-            named_foo.__name__,
-            "Foo")
-
-    def test_naming_missing_class(self):
-        self.assertRaises(
-            ImportError, api.named, 'this_name_should_hopefully_not_exist.Foo')
-        
-        
     def test_killing_dormant(self):
         DELAY = 0.1
         state = []
+
         def test():
             try:
                 state.append('start')
-                api.sleep(DELAY)
+                eventlet.sleep(DELAY)
             except:
                 state.append('except')
                 # catching GreenletExit
                 pass
             # when switching to hub, hub makes itself the parent of this greenlet,
             # thus after the function's done, the control will go to the parent
-            api.sleep(0)
+            eventlet.sleep(0)
             state.append('finished')
-        g = api.spawn(test)
-        api.sleep(DELAY/2)
-        self.assertEquals(state, ['start'])
-        api.kill(g)
+
+        g = eventlet.spawn(test)
+        eventlet.sleep(DELAY / 2)
+        self.assertEqual(state, ['start'])
+        eventlet.kill(g)
         # will not get there, unless switching is explicitly scheduled by kill
-        self.assertEquals(state,['start', 'except'])
-        api.sleep(DELAY)
-        self.assertEquals(state, ['start', 'except', 'finished'])
+        self.assertEqual(state, ['start', 'except'])
+        eventlet.sleep(DELAY)
+        self.assertEqual(state, ['start', 'except', 'finished'])
 
     def test_nested_with_timeout(self):
         def func():
-            return api.with_timeout(0.2, api.sleep, 2, timeout_value=1)
-        self.assertRaises(api.TimeoutError, api.with_timeout, 0.1, func)
+            return eventlet.with_timeout(0.2, eventlet.sleep, 2, timeout_value=1)
+
+        try:
+            eventlet.with_timeout(0.1, func)
+            self.fail('Expected Timeout')
+        except eventlet.Timeout:
+            pass
 
 
-class Foo(object):
-    pass
+def test_wrap_is_timeout():
+    class A:
+        pass
+
+    obj = eventlet.wrap_is_timeout(A)()
+    tests.check_is_timeout(obj)
 
 
-if __name__ == '__main__':
-    main()
+def test_timeouterror_deprecated():
+    # https://github.com/eventlet/eventlet/issues/378
+    code = '''import eventlet; eventlet.Timeout(1).cancel(); print('pass')'''
+    args = ['-Werror:eventlet.Timeout:DeprecationWarning', '-c', code]
+    tests.run_python(path=None, args=args, expect_pass=True)
 
+
+def test_zero_second_sleep():
+    tests.run_isolated("zero_second_sleep.py")

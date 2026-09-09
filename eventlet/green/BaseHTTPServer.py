@@ -2,10 +2,12 @@ from eventlet import patcher
 from eventlet.green import socket
 from eventlet.green import SocketServer
 
-patcher.inject('BaseHTTPServer',
+patcher.inject(
+    'http.server',
     globals(),
     ('socket', socket),
-    ('SocketServer', SocketServer))
+    ('SocketServer', SocketServer),
+    ('socketserver', SocketServer))
 
 del patcher
 

@@ -17,12 +17,12 @@ def getcurrent():
     return tasklet_to_greenlet[stackless.getcurrent()]
 
 
-class FirstSwitch(object):
+class FirstSwitch:
     def __init__(self, gr):
         self.gr = gr
 
     def __call__(self, *args, **kw):
-        #print "first call", args, kw
+        # print("first call", args, kw)
         gr = self.gr
         del gr.switch
         run, gr.run = gr.run, None
@@ -33,7 +33,7 @@ class FirstSwitch(object):
         t.run()
 
 
-class greenlet(object):
+class greenlet:
     def __init__(self, run=None, parent=None):
         self.dead = False
         if parent is None:
@@ -46,7 +46,7 @@ class greenlet(object):
         self.switch = FirstSwitch(self)
 
     def switch(self, *args):
-        #print "switch", args
+        # print("switch", args)
         global caller
         caller = stackless.getcurrent()
         coro_args[self] = args
@@ -80,5 +80,5 @@ def emulate():
     main_coro = greenlet()
     tasklet_to_greenlet[caller] = main_coro
     main_coro.t = caller
-    del main_coro.switch  ## It's already running
+    del main_coro.switch  # It's already running
     coro_args[main_coro] = None

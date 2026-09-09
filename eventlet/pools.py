@@ -1,38 +1,13 @@
 import collections
+from contextlib import contextmanager
 
 from eventlet import queue
 
+
 __all__ = ['Pool', 'TokenPool']
 
-# have to stick this in an exec so it works in 2.4
-try:
-    from contextlib import contextmanager
-    exec('''
-@contextmanager
-def item_impl(self):
-    """ Get an object out of the pool, for use with with statement.
 
-    >>> from eventlet import pools
-    >>> pool = pools.TokenPool(max_size=4)
-    >>> with pool.item() as obj:
-    ...     print "got token"
-    ...
-    got token
-    >>> pool.free()
-    4
-    """
-    obj = self.get()
-    try:
-        yield obj
-    finally:
-        self.put(obj)
-''')
-except ImportError:
-    item_impl = None
-
-
-
-class Pool(object):
+class Pool:
     """
     Pool class implements resource limitation and construction.
 
@@ -67,15 +42,6 @@ class Pool(object):
         with mypool.item() as thing:
             thing.dostuff()
 
-    If stuck on 2.4, the :meth:`get` and :meth:`put` methods are the preferred
-    nomenclature.  Use a ``finally`` to ensure that nothing is leaked::
-
-        thing = self.pool.get()
-        try:
-            thing.dostuff()
-        finally:
-            self.pool.put(thing)
-
     The maximum size of the pool can be modified at runtime via
     the :meth:`resize` method.
 
@@ -86,6 +52,7 @@ class Pool(object):
     greenthread calling :meth:`get` to cooperatively yield until an item
     is :meth:`put` in.
     """
+
     def __init__(self, min_size=0, max_size=4, order_as_stack=False, create=None):
         """*order_as_stack* governs the ordering of the items in the free pool.
         If ``False`` (the default), the free items collection (of items that
@@ -103,7 +70,7 @@ class Pool(object):
         if create is not None:
             self.create = create
 
-        for x in xrange(min_size):
+        for x in range(min_size):
             self.current_size += 1
             self.free_items.append(self.create())
 
@@ -119,13 +86,29 @@ class Pool(object):
                 created = self.create()
             except:
                 self.current_size -= 1
-                raise                
+                raise
             return created
-        self.current_size -= 1 # did not create
+        self.current_size -= 1  # did not create
         return self.channel.get()
 
-    if item_impl is not None:
-        item = item_impl
+    @contextmanager
+    def item(self):
+        """ Get an object out of the pool, for use with with statement.
+
+        >>> from eventlet import pools
+        >>> pool = pools.TokenPool(max_size=4)
+        >>> with pool.item() as obj:
+        ...     print("got token")
+        ...
+        got token
+        >>> pool.free()
+        4
+        """
+        obj = self.get()
+        try:
+            yield obj
+        finally:
+            self.put(obj)
 
     def put(self, item):
         """Put an item back into the pool, when done.  This may
@@ -136,12 +119,16 @@ class Pool(object):
             return
 
         if self.waiting():
-            self.channel.put(item)
+            try:
+                self.channel.put(item, block=False)
+                return
+            except queue.Full:
+                pass
+
+        if self.order_as_stack:
+            self.free_items.appendleft(item)
         else:
-            if self.order_as_stack:
-                self.free_items.appendleft(item)
-            else:
-                self.free_items.append(item)
+            self.free_items.append(item)
 
     def resize(self, new_size):
         """Resize the pool to *new_size*.
@@ -183,7 +170,7 @@ class Pool(object):
         raise NotImplementedError("Implement in subclass")
 
 
-class Token(object):
+class Token:
     pass
 
 
@@ -192,5 +179,6 @@ class TokenPool(Pool):
     that the coroutine which holds the token has a right to consume some
     limited resource.
     """
+
     def create(self):
         return Token()

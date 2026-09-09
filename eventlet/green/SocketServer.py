@@ -3,7 +3,9 @@ from eventlet import patcher
 from eventlet.green import socket
 from eventlet.green import select
 from eventlet.green import threading
-patcher.inject('SocketServer',
+
+patcher.inject(
+    'socketserver',
     globals(),
     ('socket', socket),
     ('select', select),

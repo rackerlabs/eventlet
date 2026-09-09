@@ -4,15 +4,14 @@ from eventlet.green import SimpleHTTPServer
 from eventlet.green import urllib
 from eventlet.green import select
 
-test = None # bind prior to patcher.inject to silence pyflakes warning below
-patcher.inject('CGIHTTPServer',
+test = None  # bind prior to patcher.inject to silence pyflakes warning below
+patcher.inject(
+    'http.server',
     globals(),
-    ('BaseHTTPServer', BaseHTTPServer),
-    ('SimpleHTTPServer', SimpleHTTPServer),
-    ('urllib',  urllib),
-    ('select',  select))
+    ('urllib', urllib),
+    ('select', select))
 
 del patcher
 
 if __name__ == '__main__':
-    test() # pyflakes false alarm here unless test = None above
+    test()  # pyflakes false alarm here unless test = None above

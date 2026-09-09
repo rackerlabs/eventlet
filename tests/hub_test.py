@@ -1,15 +1,18 @@
-from __future__ import with_statement
+import errno
+import fcntl
+import os
 import sys
-
-from tests import LimitedTestCase, main, skip_with_pyevent, skip_if_no_itimer, skip_unless
-from tests.patcher_test import ProcessBase
 import time
+
+import pytest
+
+import tests
+from tests import skip_if_no_itimer, skip_unless
 import eventlet
-from eventlet import hubs
-from eventlet.green import socket
-from eventlet.event import Event
-from eventlet.semaphore import Semaphore
+from eventlet import debug, hubs
+from eventlet.hubs.asyncio import Hub as AsyncioHub
 from eventlet.support import greenlets
+
 
 DELAY = 0.001
 
@@ -18,15 +21,14 @@ def noop():
     pass
 
 
-class TestTimerCleanup(LimitedTestCase):
+class TestTimerCleanup(tests.LimitedTestCase):
     TEST_TIMEOUT = 2
 
-    @skip_with_pyevent
     def test_cancel_immediate(self):
         hub = hubs.get_hub()
         stimers = hub.get_timers_count()
         scanceled = hub.timers_canceled
-        for i in xrange(2000):
+        for i in range(2000):
             t = hubs.get_hub().schedule_call_global(60, noop)
             t.cancel()
             self.assert_less_than_equal(hub.timers_canceled,
@@ -35,12 +37,11 @@ class TestTimerCleanup(LimitedTestCase):
         self.assert_less_than_equal(hub.get_timers_count(), 1000 + stimers)
         self.assert_less_than_equal(hub.timers_canceled, 1000)
 
-    @skip_with_pyevent
     def test_cancel_accumulated(self):
         hub = hubs.get_hub()
         stimers = hub.get_timers_count()
         scanceled = hub.timers_canceled
-        for i in xrange(2000):
+        for i in range(2000):
             t = hubs.get_hub().schedule_call_global(60, noop)
             eventlet.sleep()
             self.assert_less_than_equal(hub.timers_canceled,
@@ -52,7 +53,6 @@ class TestTimerCleanup(LimitedTestCase):
         self.assert_less_than_equal(hub.get_timers_count(), 1000 + stimers)
         self.assert_less_than_equal(hub.timers_canceled, 1000)
 
-    @skip_with_pyevent
     def test_cancel_proportion(self):
         # if fewer than half the pending timers are canceled, it should
         # not clean them out
@@ -60,7 +60,7 @@ class TestTimerCleanup(LimitedTestCase):
         uncanceled_timers = []
         stimers = hub.get_timers_count()
         scanceled = hub.timers_canceled
-        for i in xrange(1000):
+        for i in range(1000):
             # 2/3rds of new timers are uncanceled
             t = hubs.get_hub().schedule_call_global(60, noop)
             t2 = hubs.get_hub().schedule_call_global(60, noop)
@@ -84,7 +84,51 @@ class TestTimerCleanup(LimitedTestCase):
         eventlet.sleep()
 
 
-class TestScheduleCall(LimitedTestCase):
+@pytest.mark.skipif(isinstance(hubs.get_hub(), AsyncioHub),
+                    reason="Asyncio hub doesn't yet support multiple readers")
+class TestMultipleListenersCleanup(tests.LimitedTestCase):
+    def setUp(self):
+        super().setUp()
+        debug.hub_prevent_multiple_readers(False)
+        debug.hub_exceptions(False)
+
+    def tearDown(self):
+        super().tearDown()
+        debug.hub_prevent_multiple_readers(True)
+        debug.hub_exceptions(True)
+
+    def test_cleanup(self):
+        r, w = os.pipe()
+        self.addCleanup(os.close, r)
+        self.addCleanup(os.close, w)
+
+        fcntl.fcntl(r, fcntl.F_SETFL,
+                    fcntl.fcntl(r, fcntl.F_GETFL) | os.O_NONBLOCK)
+
+        def readfd(fd):
+            while True:
+                try:
+                    return os.read(fd, 1)
+                except OSError as e:
+                    if e.errno != errno.EAGAIN:
+                        raise
+                    hubs.trampoline(fd, read=True)
+
+        first_listener = eventlet.spawn(readfd, r)
+        eventlet.sleep()
+
+        second_listener = eventlet.spawn(readfd, r)
+        eventlet.sleep()
+
+        hubs.get_hub().schedule_call_global(0, second_listener.throw,
+                                            eventlet.Timeout(None))
+        eventlet.sleep()
+
+        os.write(w, b'.')
+        self.assertEqual(first_listener.wait(), b'.')
+
+
+class TestScheduleCall(tests.LimitedTestCase):
 
     def test_local(self):
         lst = [1]
@@ -107,10 +151,10 @@ class TestScheduleCall(LimitedTestCase):
         hubs.get_hub().schedule_call_global(DELAY, lst.append, 2)
         while len(lst) < 3:
             eventlet.sleep(DELAY)
-        self.assertEquals(lst, [1, 2, 3])
+        self.assertEqual(lst, [1, 2, 3])
 
 
-class TestDebug(LimitedTestCase):
+class TestDebug(tests.LimitedTestCase):
 
     def test_debug_listeners(self):
         hubs.get_hub().set_debug_listeners(True)
@@ -121,7 +165,7 @@ class TestDebug(LimitedTestCase):
         hubs.get_hub().set_timer_exceptions(False)
 
 
-class TestExceptionInMainloop(LimitedTestCase):
+class TestExceptionInMainloop(tests.LimitedTestCase):
 
     def test_sleep(self):
         # even if there was an error in the mainloop, the hub should continue
@@ -148,13 +192,12 @@ class TestExceptionInMainloop(LimitedTestCase):
                 delay, DELAY)
 
 
-class TestExceptionInGreenthread(LimitedTestCase):
+class TestExceptionInGreenthread(tests.LimitedTestCase):
 
-    @skip_unless(greenlets.preserves_excinfo)
     def test_exceptionpreservation(self):
         # events for controlling execution order
-        gt1event = Event()
-        gt2event = Event()
+        gt1event = eventlet.Event()
+        gt2event = eventlet.Event()
 
         def test_gt1():
             try:
@@ -195,7 +238,7 @@ class TestExceptionInGreenthread(LimitedTestCase):
                 hubs.get_hub().switch()
 
         # semaphores for controlling execution order
-        sem = Semaphore()
+        sem = eventlet.Semaphore()
         sem.acquire()
         g = eventlet.spawn(test_gt, sem)
         try:
@@ -205,24 +248,9 @@ class TestExceptionInGreenthread(LimitedTestCase):
             g.kill()
 
 
-class TestHubSelection(LimitedTestCase):
-
-    def test_explicit_hub(self):
-        if getattr(hubs.get_hub(), 'uses_twisted_reactor', None):
-            # doesn't work with twisted
-            return
-        oldhub = hubs.get_hub()
-        try:
-            hubs.use_hub(Foo)
-            self.assert_(isinstance(hubs.get_hub(), Foo), hubs.get_hub())
-        finally:
-            hubs._threadlocal.hub = oldhub
-
-
-class TestHubBlockingDetector(LimitedTestCase):
+class TestHubBlockingDetector(tests.LimitedTestCase):
     TEST_TIMEOUT = 10
 
-    @skip_with_pyevent
     def test_block_detect(self):
         def look_im_blocking():
             import time
@@ -233,8 +261,7 @@ class TestHubBlockingDetector(LimitedTestCase):
         self.assertRaises(RuntimeError, gt.wait)
         debug.hub_blocking_detection(False)
 
-    @skip_with_pyevent
-    @skip_if_no_itimer
+    @tests.skip_if_no_itimer
     def test_block_detect_with_itimer(self):
         def look_im_blocking():
             import time
@@ -247,11 +274,12 @@ class TestHubBlockingDetector(LimitedTestCase):
         debug.hub_blocking_detection(False)
 
 
-class TestSuspend(LimitedTestCase):
-    TEST_TIMEOUT = 3
+class TestSuspend(tests.LimitedTestCase):
+    TEST_TIMEOUT = 4
+    longMessage = True
+    maxDiff = None
 
     def test_suspend_doesnt_crash(self):
-        import errno
         import os
         import shutil
         import signal
@@ -259,14 +287,14 @@ class TestSuspend(LimitedTestCase):
         import sys
         import tempfile
         self.tempdir = tempfile.mkdtemp('test_suspend')
-        filename = os.path.join(self.tempdir,  'test_suspend.py')
+        filename = os.path.join(self.tempdir, 'test_suspend.py')
         fd = open(filename, "w")
         fd.write("""import eventlet
 eventlet.Timeout(0.5)
 try:
    eventlet.listen(("127.0.0.1", 0)).accept()
 except eventlet.Timeout:
-   print "exited correctly"
+   print("exited correctly")
 """)
         fd.close()
         python_path = os.pathsep.join(sys.path + [self.tempdir])
@@ -279,56 +307,36 @@ except eventlet.Timeout:
         os.kill(p.pid, signal.SIGSTOP)  # suspend and resume to generate EINTR
         os.kill(p.pid, signal.SIGCONT)
         output, _ = p.communicate()
-        lines = [l for l in output.split("\n") if l]
-        self.assert_("exited correctly" in lines[-1])
+        lines = output.decode('utf-8', 'replace').splitlines()
+        assert "exited correctly" in lines[-1], output
         shutil.rmtree(self.tempdir)
 
 
-class TestBadFilenos(LimitedTestCase):
+def test_repeated_select_bad_fd():
+    from eventlet.green import select
 
-    @skip_with_pyevent
-    def test_repeated_selects(self):
-        from eventlet.green import select
-        self.assertRaises(ValueError, select.select, [-1], [], [])
-        self.assertRaises(ValueError, select.select, [-1], [], [])
+    def once():
+        try:
+            select.select([-1], [], [])
+            assert False, 'Expected ValueError'
+        except ValueError:
+            pass
 
-
-class TestFork(ProcessBase):
-
-    @skip_with_pyevent
-    def test_fork(self):
-        new_mod = """
-import os
-import eventlet
-server = eventlet.listen(('localhost', 12345))
-t = eventlet.Timeout(0.01)
-try:
-    new_sock, address = server.accept()
-except eventlet.Timeout, t:
-    pass
-
-pid = os.fork()
-if not pid:
-    t = eventlet.Timeout(0.1)
-    try:
-        new_sock, address = server.accept()
-    except eventlet.Timeout, t:
-        print "accept blocked"
-
-else:
-    kpid, status = os.wait()
-    assert kpid == pid
-    assert status == 0
-    print "child died ok"
-"""
-        self.write_to_tempfile("newmod", new_mod)
-        output, lines = self.launch_subprocess('newmod.py')
-        self.assertEqual(len(lines), 3, output)
-        self.assert_("accept blocked" in lines[0])
-        self.assert_("child died ok" in lines[1])
+    once()
+    once()
 
 
-class TestDeadRunLoop(LimitedTestCase):
+@pytest.mark.skipif(sys.platform == "darwin", reason="on macOS using fork() is discouraged")
+def test_fork():
+    tests.run_isolated('hub_fork.py')
+
+
+@pytest.mark.skipif(sys.platform == "darwin", reason="on macOS using fork() is discouraged")
+def test_fork_simple():
+    tests.run_isolated('hub_fork_simple.py')
+
+
+class TestDeadRunLoop(tests.LimitedTestCase):
     TEST_TIMEOUT = 2
 
     class CustomException(Exception):
@@ -352,12 +360,12 @@ class TestDeadRunLoop(LimitedTestCase):
         # kill dummyproc, this schedules a timer to return execution to
         # this greenlet before throwing an exception in dummyproc.
         # it is from this timer that execution should be returned to this
-        # greenlet, and not by propogating of the terminating greenlet.
+        # greenlet, and not by propagating of the terminating greenlet.
         g.kill()
         with eventlet.Timeout(0.5, self.CustomException()):
             # we now switch to the hub, there should be no existing timers
             # that switch back to this greenlet and so this hub.switch()
-            # call should block indefinately.
+            # call should block indefinitely.
             self.assertRaises(self.CustomException, hub.switch)
 
     def test_parent(self):
@@ -379,49 +387,16 @@ class TestDeadRunLoop(LimitedTestCase):
             # we now switch to the hub which will allow
             # completion of dummyproc.
             # this should return execution back to the runloop and not
-            # this greenlet so that hub.switch() would block indefinately.
+            # this greenlet so that hub.switch() would block indefinitely.
             self.assertRaises(self.CustomException, hub.switch)
         assert g.dead  # sanity check that dummyproc has completed
 
 
-class Foo(object):
-    pass
+def test_use_hub_class():
+    tests.run_isolated('hub_use_hub_class.py')
 
 
-class TestDefaultHub(ProcessBase):
-
-    def test_kqueue_unsupported(self):
-        # https://github.com/eventlet/eventlet/issues/38
-        # get_hub on windows broken by kqueue
-        module_source = r'''
-# Simulate absence of kqueue even on platforms that support it.
-import select
-try:
-    del select.kqueue
-except AttributeError:
-    pass
-
-import __builtin__
-original_import = __builtin__.__import__
-
-def fail_import(name, *args, **kwargs):
-    if 'epoll' in name:
-        raise ImportError('disabled for test')
-    if 'kqueue' in name:
-        print('kqueue tried')
-    return original_import(name, *args, **kwargs)
-
-__builtin__.__import__ = fail_import
-
-
-import eventlet.hubs
-eventlet.hubs.get_default_hub()
-print('ok')
-'''
-        self.write_to_tempfile('newmod', module_source)
-        output, _ = self.launch_subprocess('newmod.py')
-        self.assertEqual(output, 'kqueue tried\nok\n')
-
-
-if __name__ == '__main__':
-    main()
+def test_kqueue_unsupported():
+    # https://github.com/eventlet/eventlet/issues/38
+    # get_hub on windows broken by kqueue
+    tests.run_isolated('hub_kqueue_unsupported.py')
